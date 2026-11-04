@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: sohbet-app
+    runtime: node
+    plan: free
+    # Repo'nun kökünde package.json yoksa (ör. her şey "sohbet-app" klasörünün içindeyse) şunu aç:
+    # rootDir: sohbet-app
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # ÜCRETSİZ kalıcı veri: özel bir GitHub reposu (GH_TOKEN + GH_REPO)
+      - key: GH_TOKEN
+        sync: false
+      - key: GH_REPO
+        sync: false
+      - key: GH_BRANCH
+        value: main
+      # (Alternatif) Bulut depolama (S3 uyumlu: Cloudflare R2, Backblaze B2...) - veriler burada saklanır
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_KEY
+        sync: false
+      - key: S3_SECRET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      # İsteğe bağlı: GIF arama (ücretsiz anahtar: developers.giphy.com)
+      - key: GIPHY_KEY
+        sync: false
+      # İsteğe bağlı: aramalar için TURN sunucusu
+      - key: TURN_URL
+        sync: false
+      - key: TURN_USER
+        sync: false
+      - key: TURN_PASS
+        sync: false
