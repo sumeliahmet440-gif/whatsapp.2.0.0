@@ -75,6 +75,7 @@ const common = {
   dir: String(process.env.GITHUB_DIR || 'veri').replace(/^\/+|\/+$/g, ''),
   delay: Number(process.env.GITHUB_DELAY_MS) || 3000,
   maxFile: (Number(process.env.GITHUB_MAX_FILE_MB) || 25) * 1024 * 1024,
+  maxTotal: (Number(process.env.GITHUB_MAX_TOTAL_MB) || 900) * 1024 * 1024,
 };
 function normalizeRepo(value) {
   return String(value || '').trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/^\/+|\/+$/g, '');
@@ -230,15 +231,24 @@ async function runFlush(store) {
 }
 async function commitBatch(store, batch) {
   const h = await loadHead(store, 0);
+  // Depo toplam sınırını yeni dosyaları yüklemeden önce kontrol et.
+  let projectedTotal = h.total;
+  for (const [key, it] of batch) {
+    const size = fs.statSync(it.file).size;
+    const previous = h.files.get(key);
+    projectedTotal += size - (previous ? previous.size : 0);
+  }
+  if (projectedTotal > store.maxTotal) {
+    throw new Error('GitHub depo toplam sınırı aşıldı: ' + (projectedTotal / 1048576).toFixed(1) + ' MB; izin verilen ' + (store.maxTotal / 1048576).toFixed(1) + ' MB. GITHUB_MAX_TOTAL_MB değerini veya depolama hizmetini kontrol et.');
+  }
   const entries = [], added = new Map();
   for (const [key, it] of batch) {
     let buf;
-    try { buf = fs.readFileSync(it.file); }
-    catch (e) { console.error('Yedeklenecek dosya okunamadı:', key, e.message); continue; }
-    const isUpload = key.startsWith('uploads/');
-    if (isUpload && buf.length > store.maxFile) {
-      console.warn(`GitHub'a konmadı (${(buf.length / 1048576).toFixed(1)} MB dosya sınırı aşıldı): ${key}`);
-      continue;
+    // Bir dosya okunamazsa veya sınırı aşarsa batch'i başarısız say.
+    // Sessizce atlamak, çağıranın yedekleme başarılı sanmasına neden olur.
+    buf = fs.readFileSync(it.file);
+    if (buf.length > store.maxFile) {
+      throw new Error(`GitHub dosya sınırı aşıldı: ${key} (${(buf.length / 1048576).toFixed(1)} MB; izin verilen ${(store.maxFile / 1048576).toFixed(1)} MB). Daha küçük dosya kullan veya S3 gibi nesne depolama bağla.`);
     }
     const b = await must(await gh(store, 'POST', '/git/blobs', { content: buf.toString('base64'), encoding: 'base64' }));
     const sha = (await b.json()).sha;
@@ -249,7 +259,7 @@ async function commitBatch(store, batch) {
   const t = await must(await gh(store, 'POST', '/git/trees', { ...(h.tree ? { base_tree: h.tree } : {}), tree: entries }));
   const tree = (await t.json()).sha;
   const c = await must(await gh(store, 'POST', '/git/commits', {
-    message: 'veri yedeği ' + new Date().toISOString(), tree, parents: [],
+    message: 'veri yedeği ' + new Date().toISOString(), tree, parents: h.commit ? [h.commit] : [],
   }));
   const commit = (await c.json()).sha;
   const refPath = `refs/heads/${store.branch}`;
@@ -259,7 +269,7 @@ async function commitBatch(store, batch) {
     if (r.status === 422) await r.arrayBuffer().catch(() => {});
     else { await must(r); done = true; }
   }
-  if (!done) await must(await gh(store, 'PATCH', `/git/refs/heads/${encodeURIComponent(store.branch)}`, { sha: commit, force: true }));
+  if (!done) await must(await gh(store, 'PATCH', `/git/refs/heads/${encodeURIComponent(store.branch)}`, { sha: commit, force: false }));
   const files = new Map(h.files);
   for (const [k, v] of added) files.set(k, v);
   let total = 0;
@@ -278,7 +288,7 @@ async function deleteCloudFile(store, key) {
   }));
   const tree = (await t.json()).sha;
   const c = await must(await gh(store, 'POST', '/git/commits', {
-    message: 'eski dosya temizliği ' + new Date().toISOString(), tree, parents: [],
+    message: 'eski dosya temizliği ' + new Date().toISOString(), tree, parents: h.commit ? [h.commit] : [],
   }));
   const commit = (await c.json()).sha;
   const refPath = `refs/heads/${store.branch}`;
@@ -286,7 +296,7 @@ async function deleteCloudFile(store, key) {
     const r = await gh(store, 'POST', '/git/refs', { ref: refPath, sha: commit });
     if (r.status !== 422) await must(r); else await r.arrayBuffer().catch(() => {});
   } else {
-    await must(await gh(store, 'PATCH', `/git/refs/heads/${encodeURIComponent(store.branch)}`, { sha: commit, force: true }));
+    await must(await gh(store, 'PATCH', `/git/refs/heads/${encodeURIComponent(store.branch)}`, { sha: commit, force: false }));
   }
   h.files.delete(key);
   h.total = [...h.files.values()].reduce((n, v) => n + v.size, 0);
@@ -335,9 +345,9 @@ async function fetchUpload(name) {
 }
 async function putUpload(name, category) {
   const file = path.join(DATA_DIR, 'uploads', name);
+  if (!fs.existsSync(file)) throw new Error(`Yüklenecek dosya bulunamadı: ${name}`);
   if (useGh && fs.statSync(file).size > common.maxFile) {
-    console.warn(`GitHub'a konmadı (${(common.maxFile / 1048576).toFixed(1)} MB dosya sınırı): ${name}`);
-    return;
+    throw new Error(`Dosya GitHub sınırını aşıyor (${(common.maxFile / 1048576).toFixed(1)} MB). Dosyayı küçült veya S3 kullan.`);
   }
   return putFile('uploads/' + name, file, true, category || 'media');
 }

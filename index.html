@@ -161,7 +161,6 @@ input:focus,textarea:focus{border-color:var(--acc)}
  </div>
 </div>
 <div id="incoming" class="hide"></div>
-<div id="messageToast" class="hide" style="position:fixed;top:14px;right:14px;z-index:69;max-width:min(360px,calc(100vw - 28px));background:var(--panel);border:1px solid var(--acc);border-radius:14px;padding:12px 15px;box-shadow:0 10px 35px #0009;cursor:pointer"></div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/vendor/gif/gif.js"></script>
@@ -225,43 +224,6 @@ async function boot() {
 }
 
 let swRegistration = null;
-let deferredInstallPrompt = null;
-window.addEventListener('beforeinstallprompt', (event) => {
-  event.preventDefault();
-  deferredInstallPrompt = event;
-});
-window.addEventListener('appinstalled', () => {
-  deferredInstallPrompt = null;
-  alert('Sohbet ana ekrana eklendi!');
-});
-function deviceFamily() {
-  const ua = navigator.userAgent || '';
-  if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'ios';
-  if (/Android/i.test(ua)) return 'android';
-  if (/Windows/i.test(ua)) return 'windows';
-  return 'other';
-}
-async function installSite(target) {
-  const family = deviceFamily();
-  if (target === 'ios' || family === 'ios') {
-    alert('iPhone/iPad: Safari ile bu siteyi aç. Alttaki Paylaş düğmesine dokun, “Ana Ekrana Ekle” seçeneğini seç ve Ekle’ye bas.');
-    return;
-  }
-  if (deferredInstallPrompt && (target === family || target === 'android' || target === 'windows')) {
-    deferredInstallPrompt.prompt();
-    const result = await deferredInstallPrompt.userChoice;
-    deferredInstallPrompt = null;
-    if (result && result.outcome === 'accepted') alert('Sohbet ana ekrana/uygulamalar listesine ekleniyor.');
-    return;
-  }
-  if (target === 'android') {
-    alert('Android: Chrome menüsünü (⋮) açıp “Uygulamayı yükle” veya “Ana ekrana ekle” seçeneğine dokun.');
-  } else if (target === 'windows') {
-    alert('Windows: Edge veya Chrome menüsünü aç. “Uygulamalar” > “Bu siteyi uygulama olarak yükle” (Edge) ya da “Sohbet’i yükle” (Chrome) seçeneğini kullan.');
-  } else {
-    alert('Tarayıcı menüsünden “Ana ekrana ekle” veya “Uygulamayı yükle” seçeneğini kullan.');
-  }
-}
 async function setupPush() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window))
     throw new Error('Bu tarayıcı push bildirimlerini desteklemiyor');
@@ -294,8 +256,6 @@ function start(user) {
     if (incomingId && !pendingCall) { showIncoming({ callId: incomingId, convId: Number(params.get('open') || 0), video: params.get('video') === '1', from: { username: params.get('from') || 'Arayan kişi' } }); history.replaceState({}, '', '/'); }
     if (firstConnect) {
       firstConnect = false;
-      const profileName = params.get('profile');
-      if (profileName) { try { const found = await api('/users?q=' + encodeURIComponent(profileName)); const targetUser = found.find(x => x.username.toLowerCase() === profileName.toLowerCase()); if (targetUser) profileModal(targetUser.id); } catch {} }
       const openId = Number(params.get('open') || 0);
       if (openId) { try { await loadConvs(); const target = convs.find((c) => c.id === openId); if (target) openConv(target); } catch {} }
       return;
@@ -391,24 +351,12 @@ async function renderMe() {
     <button class="pri" id="saveBio">Kaydet</button>
     <button class="ghost" id="enablePush">🔔 Bildirimleri aç</button>
     <div style="font-size:12px;color:var(--mut)">Site açık değilken mesaj ve arama bildirimi alabilmek için bildirim izni ver.</div>
-    <div style="width:100%;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:12px;margin-top:8px">
-      <b>📲 Sohbet’i cihazına ekle</b>
-      <div style="font-size:12px;color:var(--mut);margin:5px 0 10px">Bu düğmeler aynı web sitesini cihazının uygulamaları arasına ekler.</div>
-      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px">
-        <button class="ghost" id="installAndroid">🤖 Android</button>
-        <button class="ghost" id="installIOS">🍎 iOS</button>
-        <button class="ghost" id="installWindows">🪟 Windows</button>
-      </div>
-    </div>
     <div style="font-size:12px;color:var(--mut);margin-top:10px">Başka cihazdan girmek için giriş kodun:</div>
     <input readonly value="${esc(d.token)}" onclick="this.select()">
     <button class="ghost" id="logout">Çıkış yap</button></div>`;
   $('#avFile').onchange = async (e) => { const fd = new FormData(); fd.append('file', e.target.files[0]); try { await api('/avatar', { body: fd }); me.avatar = (await api('/me')).user.avatar; renderMe(); } catch (er) { alert(er.message); } };
   $('#saveBio').onclick = async () => { await api('/profile', { method: 'PUT', json: { bio: $('#bio').value } }); alert('Kaydedildi'); };
   $('#enablePush').onclick = async () => { try { await setupPush(); alert('Bildirimler açıldı!'); } catch (e) { alert(e.message); } };
-  $('#installAndroid').onclick = () => installSite('android');
-  $('#installIOS').onclick = () => installSite('ios');
-  $('#installWindows').onclick = () => installSite('windows');
   $('#logout').onclick = () => { if (confirm('Çıkış yapılsın mı? Giriş kodunu not aldığından emin ol.')) { localStorage.removeItem('token'); location.reload(); } };
 }
 
@@ -429,20 +377,7 @@ async function renderReels() {
 const aiQA=[
 ['Nasıl hesap açarım?','Kullanıcı adını yazıp Başla düğmesine bas.'],['Giriş kodum nedir?','Profil sekmende görünen giriş kodunu güvenli yerde sakla.'],['Başka cihazdan nasıl girerim?','Aynı kullanıcı adını ve profilindeki giriş kodunu kullan.'],['Nasıl mesaj gönderirim?','Sohbet aç, alttaki kutuya yaz ve Gönder’e bas.'],['Dosya nasıl gönderirim?','Sohbette ataş simgesine basıp dosya seç.'],['GIF nasıl gönderirim?','GIF/çıkartma ara düğmesinden kütüphaneyi aç veya GIF oluştur.'],['Kendi GIF’imi nasıl eklerim?','GIF kütüphanesini açıp yükle seçeneğiyle GIF veya görsel ekle.'],['Çıkartma nasıl bulurum?','Kütüphanede adını aratabilirsin.'],['Grup nasıl kurarım?','Sohbetler sekmesinde Yeni grup düğmesine bas.'],['Gruba kişi nasıl eklerim?','Grup profili menüsünden üye ekleme işlemini kullan.'],['Grup profilini kim düzenler?','Bu sürümde grup kurucusu grup adı ve açıklamasını düzenleyebilir.'],['Hikaye ne kadar kalır?','Hikayeler 24 saat görünür.'],['Reels nasıl paylaşırım?','Reels sekmesinden Reels paylaş düğmesine basıp video seç.'],['Kaç günde bir Reels atabilirim?','Her hesap 7 günde bir Reels paylaşabilir.'],['Reels ne kadar saklanır?','Reels videoları 5 ay sonra otomatik temizlenir.'],['Mesajlar ne zaman silinir?','Mesajlar gönderildikten 10 gün sonra otomatik temizlenir.'],['Mesajlarımı geri alabilir miyim?','10 günlük saklama süresi dolduktan sonra mesajlar geri getirilemez.'],['Bildirimleri nasıl açarım?','Profil sekmesindeki bildirimleri aç seçeneğini kullan.'],['Site kapalıyken bildirim gelir mi?','Push izni ve sunucu ayarları açıksa yeni bildirimler gelebilir.'],['Arama nasıl başlatılır?','Sohbeti açıp telefon veya kamera simgesine bas.'],['Ekranımı nasıl paylaşırım?','Arama sırasında ekran paylaşım simgesine bas ve tarayıcıdan ekran seç.'],['Kamerayı nasıl kapatırım?','Arama ekranındaki kamera düğmesine bas.'],['Mikrofonu nasıl kapatırım?','Arama ekranındaki mikrofon düğmesine bas.'],['Birini nasıl takip ederim?','Kişiler sekmesinde kullanıcıyı bulup Takip et’e bas.'],['Neden mesaj atamıyorum?','Birebir mesajlaşma için iki tarafın da birbirini takip etmesi gerekir.'],['Profil fotoğrafımı nasıl değiştiririm?','Profil sekmesinden fotoğraf yükle.'],['Biyografimi nasıl değiştiririm?','Profil bölümündeki biyografi alanını düzenle.'],['Veriler nereye kaydedilir?','Render ayarların uygunsa SQLite veritabanı GitHub’ın veri dalına yedeklenir.'],['Depolama sonsuz mu?','Hayır. Eski mesajlar ve Reels otomatik temizlenerek depolama azaltılır.'],['Sorun yaşarsam ne yapmalıyım?','Sayfayı yenile; sürerse yöneticine /durum sayfasındaki hata bilgisini ilet.']
 ];
-function renderAI(){
- const list=$('#list');
- list.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;gap:12px;min-height:100%">
-  <div style="display:flex;align-items:center;gap:10px"><div class="av">✨</div><div><h3 style="margin:0">Sohbet AI</h3><small style="color:var(--ok)">Yardım asistanı · hazır cevaplar</small></div></div>
-  <div style="background:var(--panel2);border:1px solid var(--line);border-radius:15px;padding:12px">Merhaba! Sohbet uygulaması hakkında sorularını yanıtlayabilirim. Ne öğrenmek istersin?</div>
-  <input id="aiQ" placeholder="Sohbet AI'ya sor..." autocomplete="off">
-  <div id="aiAnswer" style="display:none;background:linear-gradient(145deg,#34265b,#202637);border-radius:15px;padding:13px;line-height:1.5"></div>
-  <div style="font-size:12px;color:var(--mut)">Hızlı sorular</div><div id="aiQuestions" style="display:grid;grid-template-columns:1fr 1fr;gap:7px"></div>
-  <small style="color:var(--mut)">Not: Bu sürümde yanıtlar uygulama içindeki hazır bilgi bankasından gelir. Gerçek üretken AI için ayrıca bir AI API bağlantısı gerekir.</small>
- </div>`;
- const render=()=>{$('#aiQuestions').innerHTML=aiQA.slice(0,12).map((x,i)=>`<button data-ai="${i}" style="text-align:left;font-size:12px;padding:9px">${esc(x[0])}</button>`).join('')};
- const answer=q=>{const clean=String(q||'').trim().toLocaleLowerCase('tr');if(!clean)return;const exact=aiQA.find(x=>x[0].toLocaleLowerCase('tr').includes(clean)||clean.includes(x[0].toLocaleLowerCase('tr').replace(/[?]/g,''))||x[0].toLocaleLowerCase('tr').split(' ').filter(w=>w.length>3).some(w=>clean.includes(w)));$('#aiAnswer').style.display='block';$('#aiAnswer').innerHTML=`<b>✨ Yanıt</b><div style="margin-top:6px">${esc(exact?exact[1]:'Bu konuda hazır bir yanıtım yok. “Bildirim”, “arama”, “profil”, “Reels” veya “yedekleme” gibi bir başlık deneyebilirsin.')}</div>`};
- render();$('#aiQuestions').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#aiQ').value=aiQA[+b.dataset.ai][0];answer($('#aiQ').value)});$('#aiQ').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();answer(e.target.value)}};
-}
+function renderAI(){const list=$('#list');list.innerHTML=`<div style="padding:14px"><h3>✨ Sohbet AI</h3><p style="color:var(--mut)">Aşağıdaki 30 konuda hazır cevap verebilir. Bir soruya dokun veya kendin yaz.</p><input id="aiQ" placeholder="Sorunu yaz..."><div id="aiAnswer" style="padding:12px;margin:10px 0;background:var(--panel2);border-radius:12px">Merhaba! Sana nasıl yardımcı olabilirim?</div><div id="aiQuestions"></div></div>`;const render=()=>{$('#aiQuestions').innerHTML=aiQA.map((x,i)=>`<button data-ai="${i}" style="display:block;width:100%;text-align:left;margin:5px 0">${i+1}. ${esc(x[0])}</button>`).join('')};const answer=q=>{const exact=aiQA.find(x=>x[0].toLocaleLowerCase('tr').includes(q.toLocaleLowerCase('tr'))||q.toLocaleLowerCase('tr').includes(x[0].toLocaleLowerCase('tr').replace(/[?]/g,'')));$('#aiAnswer').textContent=exact?exact[1]:'Bu soru hazır 30 konu arasında yok. Listeden en yakın başlığı seçebilirsin.'};render();$('#aiQuestions').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#aiQ').value=aiQA[+b.dataset.ai][0];answer($('#aiQ').value)});$('#aiQ').onkeydown=e=>{if(e.key==='Enter')answer(e.target.value)}}
 
 // ---------- GIF ve çıkartma arama ----------
 async function openGifLibrary(){modal(`<h3>GIF ve çıkartma kütüphanesi</h3><input id="gifQ" placeholder="İsme göre ara..."><div class="bar"><button class="pri" id="gifAdd">＋ GIF/çıkartma yükle</button><span style="color:var(--mut);font-size:12px">Yüklediklerin herkesçe aranabilir</span></div><div id="gifResults"></div>`);const load=async()=>{const a=await api('/gifs?q='+encodeURIComponent($('#gifQ').value));$('#gifResults').innerHTML=a.map(g=>`<div class="item" data-gif="${g.id}"><img src="${esc(g.file)}" style="width:58px;height:58px;object-fit:cover;border-radius:8px"><div class="t"><b>${esc(g.name)}</b><span>${g.kind==='gif'?'GIF':'Çıkartma'} · ${esc(g.username)}</span></div><button class="pri">Gönder</button></div>`).join('')||'<p style="color:var(--mut)">Sonuç bulunamadı.</p>';$('#gifResults').querySelectorAll('[data-gif]').forEach(el=>el.querySelector('button').onclick=async()=>{await api('/gifs/'+el.dataset.gif+'/send',{json:{convId:curConv.id}});closeModal()})};$('#gifQ').oninput=load;$('#gifAdd').onclick=()=>$('#gifUpload').click();await load()}
@@ -530,13 +465,6 @@ async function loadOlder() {
   if (curConv !== cv) return;
   if (older.length) { oldestId = older[0].id; btn.insertAdjacentHTML('afterend', older.map(msgHtml).join('')); }
   if (older.length < 50) btn.remove();
-}
-function showMessageToast(m){
-  const el=$('#messageToast'); if(!el)return;
-  el.textContent=(m.username||'Yeni mesaj')+': '+(m.text||'Yeni bir dosya gönderdi');
-  el.classList.remove('hide');
-  el.onclick=async()=>{el.classList.add('hide');await loadConvs();const c=convs.find(x=>x.id===m.conv_id);if(c)openConv(c)};
-  clearTimeout(showMessageToast.timer);showMessageToast.timer=setTimeout(()=>el.classList.add('hide'),6500);
 }
 function onMessage(m) {
   if (document.hidden && swRegistration && Notification.permission === 'granted' && m.sender_id !== me.id) {

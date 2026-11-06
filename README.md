@@ -141,12 +141,3 @@ Render > Environment bölümünde:
 Eski tek-depo yedekleri için geri uyumluluk vardır: uygulama yüklemeyi yeni hedef depoya yapar; dosya geri yüklenirken Reels, medya ve ana depoda arama yapar. Silinen dosyalar da üç depoda aranıp kaldırılır.
 
 Önemli: GitHub bir medya CDN'i veya sınırsız dosya deposu değildir. Bu ayarlar uygulamanın kendi 25 MB tek dosya ve 900 MB depo başına sınırlarını uygular; GitHub'ın kendi limitleri ayrıca geçerlidir. Büyük video yüklemeleri bu sınıra sığmıyorsa kalıcı yedeklenmez. Üç depoya ayırmak GitHub API hız limitini üçe katlamaz.
-
-## PWA kurulum ve bildirim notları
-- Android ve Windows'ta desteklenen tarayıcılarda Profil > Uygulamalar bölümünden kurulum istemi açılır. Tarayıcı istemi sunmazsa tarayıcı menüsündeki "Uygulamayı yükle" seçeneği kullanılabilir.
-- iPhone/iPad'de Safari > Paylaş > Ana Ekrana Ekle adımları gerekir.
-- Uygulama simgesi `/icon-192.png` ve `/icon-512.png` dosyalarıyla sağlanır.
-- Web Push için Render'da `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` ve tercihen `VAPID_SUBJECT` tanımlanmalıdır. Kullanıcı profilinden bildirim izni vermelidir.
-- Arka plandaki/kapalı uygulamada mesaj ve arama uyarıları işletim sistemi web bildirimi olarak gelir. Bildirimin kendi sesini cihaz/tarayıcı ayarları belirler; web sayfası kapalıyken özel bir ses dosyasını zorla çaldırmak tarayıcı güvenlik kısıtları nedeniyle mümkün değildir.
-- iOS web push desteği sürüm ve kurulum koşullarına bağlıdır; ana ekrana eklenmiş web uygulaması ve kullanıcı izni gerekir.
-- AI ekranı bu pakette uygulama yardım bilgi bankasıyla çalışan, WhatsApp benzeri sohbet düzeninde bir yardımcıdır. Gerçek üretken AI yanıtları için ayrıca güvenli sunucu tarafı AI API entegrasyonu ve API anahtarı gerekir; tarayıcıya gizli anahtar konulmamalıdır.

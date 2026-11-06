@@ -14,13 +14,7 @@ self.addEventListener('push', (event) => {
     data: { url: data.url || '/' },
     vibrate: data.call ? [300, 150, 300, 150, 500] : [120, 60, 120],
   };
-  event.waitUntil((async () => {
-    // Açık ve görünür sekme kendi arayüz bildirimini gösterir; arka plan/kapalı sekmede OS bildirimi göster.
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const visible = windows.some((client) => client.visibilityState === 'visible' && client.focused);
-    if (visible) return;
-    await self.registration.showNotification(title, options);
-  })());
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
