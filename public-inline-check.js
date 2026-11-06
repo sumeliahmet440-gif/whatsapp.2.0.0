@@ -1,0 +1,581 @@
+
+
+
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let token = localStorage.getItem('token'), me = null, socket = null;
+let tab = 'chats', convs = [], curConv = null, oldestId = 0;
+
+async function api(path, opts = {}) {
+  const h = { 'x-token': token || '' };
+  let body = opts.body;
+  if (opts.json) { h['content-type'] = 'application/json'; body = JSON.stringify(opts.json); }
+  const r = await fetch('/api' + path, { method: opts.method || (body ? 'POST' : 'GET'), headers: h, body });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const err = new Error(d.error || 'Hata oluştu'); err.status = r.status; throw err; }
+  return d;
+}
+const avatar = (u, cls = '') => `<div class="av ${cls}">${u && u.avatar ? `<img src="${esc(u.avatar)}">` : esc((u && u.username || '?')[0].toUpperCase())}</div>`;
+const fmtTime = (t) => new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+// ---------- Giriş ----------
+let loginMode = false;
+$('#aSwitch').onclick = () => {
+  loginMode = !loginMode;
+  $('#aCode').classList.toggle('hide', !loginMode);
+  $('#aGo').textContent = loginMode ? 'Giriş yap' : 'Başla';
+  $('#aSwitch').textContent = loginMode ? 'Yeni hesap oluştur' : 'Zaten hesabım var';
+  $('#authSub').textContent = loginMode ? 'İsmin ve giriş kodunla gir.' : 'Bir isim seç, hemen başla.';
+};
+$('#aGo').onclick = async () => {
+  $('#aErr').textContent = '';
+  try {
+    const username = $('#aName').value.trim();
+    const d = await api(loginMode ? '/login' : '/register', { json: { username, token: $('#aCode').value.trim() } });
+    token = d.token; localStorage.setItem('token', token);
+    start(d.user);
+  } catch (e) { $('#aErr').textContent = e.message; }
+};
+// DİKKAT: onkeydown'dan false dönerse tarayıcı tuşu engeller (yazı yazılamaz). O yüzden if { } bloğu kullanıyoruz.
+const authEnter = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#aGo').click(); } };
+$('#aName').onkeydown = authEnter;
+$('#aCode').onkeydown = authEnter;
+
+async function boot() {
+  if (!token) return;
+  // Ücretsiz sunucu uyuyorsa ilk istekler hata verir; bu yüzden hemen çıkış yaptırmayıp bekleyip tekrar deniyoruz.
+  const row = $('#auth .row');
+  row.classList.add('hide');
+  $('#authSub').textContent = 'Bağlanıyor… (sunucu uyanıyorsa 1 dakika kadar sürebilir)';
+  for (let i = 0; i < 30; i++) {
+    try { const d = await api('/me'); row.classList.remove('hide'); start(d.user); return; }
+    catch (e) {
+      if (e.status === 401) { localStorage.removeItem('token'); token = null; break; } // giriş kodu artık geçersiz
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  if (token) { $('#authSub').textContent = 'Sunucuya ulaşılamadı. Sayfayı yenileyip tekrar dene.'; return; }
+  row.classList.remove('hide');
+  $('#authSub').textContent = 'Bir isim seç, hemen başla.';
+}
+
+let swRegistration = null;
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  alert('Sohbet ana ekrana eklendi!');
+});
+function deviceFamily() {
+  const ua = navigator.userAgent || '';
+  if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/i.test(ua)) return 'android';
+  if (/Windows/i.test(ua)) return 'windows';
+  return 'other';
+}
+async function installSite(target) {
+  const family = deviceFamily();
+  if (target === 'ios' || family === 'ios') {
+    alert('iPhone/iPad: Safari ile bu siteyi aç. Alttaki Paylaş düğmesine dokun, “Ana Ekrana Ekle” seçeneğini seç ve Ekle’ye bas.');
+    return;
+  }
+  if (deferredInstallPrompt && (target === family || target === 'android' || target === 'windows')) {
+    deferredInstallPrompt.prompt();
+    const result = await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    if (result && result.outcome === 'accepted') alert('Sohbet ana ekrana/uygulamalar listesine ekleniyor.');
+    return;
+  }
+  if (target === 'android') {
+    alert('Android: Chrome menüsünü (⋮) açıp “Uygulamayı yükle” veya “Ana ekrana ekle” seçeneğine dokun.');
+  } else if (target === 'windows') {
+    alert('Windows: Edge veya Chrome menüsünü aç. “Uygulamalar” > “Bu siteyi uygulama olarak yükle” (Edge) ya da “Sohbet’i yükle” (Chrome) seçeneğini kullan.');
+  } else {
+    alert('Tarayıcı menüsünden “Ana ekrana ekle” veya “Uygulamayı yükle” seçeneğini kullan.');
+  }
+}
+async function setupPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window))
+    throw new Error('Bu tarayıcı push bildirimlerini desteklemiyor');
+  const cfg = await api('/push/key');
+  if (!cfg.enabled || !cfg.publicKey) throw new Error('Sunucu tarafında VAPID anahtarları ayarlanmamış');
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Bildirim izni verilmedi');
+  swRegistration = await navigator.serviceWorker.register('/sw.js');
+  let sub = await swRegistration.pushManager.getSubscription();
+  if (!sub) sub = await swRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(cfg.publicKey) });
+  await api('/push/subscribe', { json: { subscription: sub.toJSON() } });
+  return true;
+}
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64); return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+function start(user) {
+  me = user;
+  $('#auth').classList.add('hide'); $('#app').classList.remove('hide');
+  socket = io({ auth: { token } });
+  socket.on('message', onMessage);
+  let firstConnect = true;
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').then((r) => { swRegistration = r; }).catch(() => {});
+  socket.on('connect', async () => {
+    const params = new URLSearchParams(location.search);
+    const incomingId = params.get('incomingCall');
+    if (incomingId && !pendingCall) { showIncoming({ callId: incomingId, convId: Number(params.get('open') || 0), video: params.get('video') === '1', from: { username: params.get('from') || 'Arayan kişi' } }); history.replaceState({}, '', '/'); }
+    if (firstConnect) {
+      firstConnect = false;
+      const profileName = params.get('profile');
+      if (profileName) { try { const found = await api('/users?q=' + encodeURIComponent(profileName)); const targetUser = found.find(x => x.username.toLowerCase() === profileName.toLowerCase()); if (targetUser) profileModal(targetUser.id); } catch {} }
+      const openId = Number(params.get('open') || 0);
+      if (openId) { try { await loadConvs(); const target = convs.find((c) => c.id === openId); if (target) openConv(target); } catch {} }
+      return;
+    }
+    try {
+      await loadConvs();
+      const open = curConv && convs.find((x) => x.id === curConv.id);
+      if (open) await openConv(open); else if (tab === 'chats') renderTab();
+    } catch {}
+  });
+  socket.on('convs:changed', () => { if (tab === 'chats') renderTab(); else loadConvs(); });
+  socket.on('call:incoming', showIncoming);
+  socket.on('call:ended', ({ callId }) => { if (pendingCall && pendingCall.callId === callId) hideIncoming(); });
+  socket.on('signal', onSignal);
+  socket.on('call:peer-joined', ({ sid, username }) => { peerNames[sid] = username; });
+  socket.on('call:peer-left', ({ sid }) => removePeer(sid));
+  api('/ice').then((d) => { ICE = d; }).catch(() => {});
+  renderTab();
+}
+
+// ---------- Sekmeler ----------
+document.querySelectorAll('#tabs button').forEach((b) => (b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
+  tab = b.dataset.t; renderTab();
+}));
+function renderTab() {
+  ({ chats: renderChats, stories: renderStories, reels: renderReels, ai: renderAI, people: renderPeople, me: renderMe })[tab]();
+}
+async function loadConvs() { convs = await api('/convs'); }
+
+function convTitle(c) {
+  if (c.type === 'group') return c.name;
+  const o = c.members.find((m) => m.id !== me.id);
+  return o ? o.username : 'Sohbet';
+}
+function convAvatar(c, cls) {
+  if (c.type === 'group') return `<div class="av ${cls || ''}">${c.avatar ? `<img src="${esc(c.avatar)}">` : '👥'}</div>`;
+  return avatar(c.members.find((m) => m.id !== me.id), cls);
+}
+function preview(m) {
+  if (!m) return 'Henüz mesaj yok';
+  const p = { image: '📷 Fotoğraf', video: '🎥 Video', audio: '🎵 Ses', file: '📄 ' + (m.file_name || 'Dosya') }[m.kind];
+  return p || m.text;
+}
+
+async function renderChats() {
+  const list = $('#list');
+  await loadConvs();
+  if (tab !== 'chats') return;
+  list.innerHTML = `<div class="bar"><button class="pri" id="newGroup" style="flex:1">+ Yeni grup</button></div>` +
+    (convs.length ? convs.map((c) => `<div class="item ${curConv && curConv.id === c.id ? 'on' : ''}" data-id="${c.id}">
+      ${convAvatar(c)}<div class="t"><b>${esc(convTitle(c))}</b><span>${esc(preview(c.last))}</span></div></div>`).join('')
+      : '<p style="color:var(--mut);padding:14px">Henüz sohbetin yok. Kişiler sekmesinden birini takip et; o da seni takip edince mesajlaşabilirsiniz.</p>');
+  list.querySelectorAll('.item').forEach((el) => (el.onclick = () => openConv(convs.find((c) => c.id == el.dataset.id))));
+  $('#newGroup').onclick = newGroupModal;
+}
+
+async function renderPeople() {
+  const list = $('#list');
+  list.innerHTML = `<div class="bar"><input id="q" placeholder="Kullanıcı ara..."></div><div id="plist"></div>`;
+  const load = async () => {
+    const us = await api('/users?q=' + encodeURIComponent($('#q').value));
+    $('#plist').innerHTML = us.map((u) => `<div class="item" data-id="${u.id}">${avatar(u)}
+      <div class="t"><b>${esc(u.username)}</b><span>${u.following && u.followsMe ? 'Karşılıklı takip ✓' : u.followsMe ? 'Seni takip ediyor' : u.following ? 'Takip ediyorsun' : ''}</span></div>
+      <button class="fbtn ${u.following ? 'ghost' : 'pri'}">${u.following ? 'Takibi bırak' : 'Takip et'}</button>
+      ${u.following && u.followsMe ? '<button class="mbtn">💬</button>' : ''}</div>`).join('') || '<p style="color:var(--mut);padding:14px">Kimse yok</p>';
+    $('#plist').querySelectorAll('.item').forEach((el) => {
+      const id = el.dataset.id, u = us.find((x) => x.id == id);
+      el.querySelector('.fbtn').onclick = async (e) => { e.stopPropagation(); await api('/follow/' + id, { method: u.following ? 'DELETE' : 'POST' }); load(); };
+      const mb = el.querySelector('.mbtn');
+      if (mb) mb.onclick = async (e) => { e.stopPropagation(); openConv(await api('/dm/' + id, { method: 'POST' })); };
+      el.onclick = () => profileModal(id);
+    });
+  };
+  $('#q').oninput = load; load();
+}
+
+async function profileModal(id) {
+  const u = await api('/user/' + id);
+  modal(`<div class="prof">${avatar(u, 'lg')}<h3 style="margin:0">${esc(u.username)}</h3><div style="color:var(--mut)">${esc(u.bio || '')}</div>
+   <div style="color:var(--mut)">${u.followers} takipçi · ${u.followingCount} takip</div>
+   ${u.following && u.followsMe ? '<button class="pri" id="pm">💬 Mesaj at</button>' : '<div style="color:var(--mut);font-size:13px">Mesajlaşmak için birbirinizi takip etmelisiniz</div>'}</div>`);
+  const pm = $('#pm'); if (pm) pm.onclick = async () => { closeModal(); openConv(await api('/dm/' + id, { method: 'POST' })); };
+}
+
+async function renderMe() {
+  const d = await api('/me');
+  $('#list').innerHTML = `<div class="pad prof">
+    <label style="cursor:pointer">${avatar(d.user, 'lg')}<input type="file" id="avFile" accept="image/*" class="hide"></label>
+    <div style="color:var(--mut);font-size:12px">Fotoğrafa dokun, değiştir</div>
+    <h3 style="margin:0">${esc(d.user.username)}</h3>
+    <textarea id="bio" placeholder="Biyografi" maxlength="200">${esc(d.user.bio || '')}</textarea>
+    <button class="pri" id="saveBio">Kaydet</button>
+    <button class="ghost" id="enablePush">🔔 Bildirimleri aç</button>
+    <div style="font-size:12px;color:var(--mut)">Site açık değilken mesaj ve arama bildirimi alabilmek için bildirim izni ver.</div>
+    <div style="width:100%;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:12px;margin-top:8px">
+      <b>📲 Sohbet’i cihazına ekle</b>
+      <div style="font-size:12px;color:var(--mut);margin:5px 0 10px">Bu düğmeler aynı web sitesini cihazının uygulamaları arasına ekler.</div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px">
+        <button class="ghost" id="installAndroid">🤖 Android</button>
+        <button class="ghost" id="installIOS">🍎 iOS</button>
+        <button class="ghost" id="installWindows">🪟 Windows</button>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--mut);margin-top:10px">Başka cihazdan girmek için giriş kodun:</div>
+    <input readonly value="${esc(d.token)}" onclick="this.select()">
+    <button class="ghost" id="logout">Çıkış yap</button></div>`;
+  $('#avFile').onchange = async (e) => { const fd = new FormData(); fd.append('file', e.target.files[0]); try { await api('/avatar', { body: fd }); me.avatar = (await api('/me')).user.avatar; renderMe(); } catch (er) { alert(er.message); } };
+  $('#saveBio').onclick = async () => { await api('/profile', { method: 'PUT', json: { bio: $('#bio').value } }); alert('Kaydedildi'); };
+  $('#enablePush').onclick = async () => { try { await setupPush(); alert('Bildirimler açıldı!'); } catch (e) { alert(e.message); } };
+  $('#installAndroid').onclick = () => installSite('android');
+  $('#installIOS').onclick = () => installSite('ios');
+  $('#installWindows').onclick = () => installSite('windows');
+  $('#logout').onclick = () => { if (confirm('Çıkış yapılsın mı? Giriş kodunu not aldığından emin ol.')) { localStorage.removeItem('token'); location.reload(); } };
+}
+
+// ---------- Reels akışı ----------
+async function renderReels() {
+  const list=$('#list');
+  list.innerHTML=`<div class="bar"><button class="pri" id="reelAdd">＋ Reels paylaş</button><input type="file" id="reelFile" class="hide" accept="video/*"></div><div id="reelFeed"><p style="padding:14px;color:var(--mut)">Reels yükleniyor…</p></div>`;
+  $('#reelAdd').onclick=()=>$('#reelFile').click();
+  $('#reelFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);fd.append('caption',prompt('Reels açıklaması')||'');try{await api('/reels',{body:fd});renderReels();}catch(er){alert(er.message)}e.target.value=''};
+  const rows=await api('/reels');
+  $('#reelFeed').innerHTML=rows.map(r=>`<article class="item" style="display:block;margin:10px;border:1px solid var(--line)"><div style="display:flex;align-items:center;gap:8px">${avatar(r)}<b>${esc(r.username)}</b></div><video src="${esc(r.file)}" controls playsinline preload="metadata" style="width:100%;max-height:440px;object-fit:contain;background:#000;margin-top:8px;border-radius:12px"></video><p>${esc(r.caption||'')}</p><div class="bar"><button data-like="${r.id}">${r.liked?'❤️':'🤍'} ${r.likes}</button><button data-comment="${r.id}">💬 ${r.comments}</button><button data-share="${r.id}">↗ Paylaş</button></div></article>`).join('')||'<p style="padding:14px;color:var(--mut)">Henüz Reels yok. İlk videoyu sen paylaş!</p>';
+  $('#reelFeed').querySelectorAll('[data-like]').forEach(b=>b.onclick=async()=>{await api('/reels/'+b.dataset.like+'/like',{method:'POST'});renderReels()});
+  $('#reelFeed').querySelectorAll('[data-comment]').forEach(b=>b.onclick=async()=>{const id=b.dataset.comment;const comments=await api('/reels/'+id+'/comments');const val=prompt('Yorumlar:\n'+comments.map(c=>c.username+': '+c.text).join('\n')+'\n\nYeni yorum yaz:');if(val){await api('/reels/'+id+'/comments',{json:{text:val}});renderReels()}});
+  $('#reelFeed').querySelectorAll('[data-share]').forEach(b=>b.onclick=()=>{const r=rows.find(x=>x.id==b.dataset.share);navigator.clipboard?.writeText(location.origin+r.file).then(()=>alert('Reels bağlantısı kopyalandı')).catch(()=>prompt('Bağlantı',location.origin+r.file))});
+}
+
+// ---------- Uygulama içi AI: 30 hazır soru-cevap ----------
+const aiQA=[
+['Nasıl hesap açarım?','Kullanıcı adını yazıp Başla düğmesine bas.'],['Giriş kodum nedir?','Profil sekmende görünen giriş kodunu güvenli yerde sakla.'],['Başka cihazdan nasıl girerim?','Aynı kullanıcı adını ve profilindeki giriş kodunu kullan.'],['Nasıl mesaj gönderirim?','Sohbet aç, alttaki kutuya yaz ve Gönder’e bas.'],['Dosya nasıl gönderirim?','Sohbette ataş simgesine basıp dosya seç.'],['GIF nasıl gönderirim?','GIF/çıkartma ara düğmesinden kütüphaneyi aç veya GIF oluştur.'],['Kendi GIF’imi nasıl eklerim?','GIF kütüphanesini açıp yükle seçeneğiyle GIF veya görsel ekle.'],['Çıkartma nasıl bulurum?','Kütüphanede adını aratabilirsin.'],['Grup nasıl kurarım?','Sohbetler sekmesinde Yeni grup düğmesine bas.'],['Gruba kişi nasıl eklerim?','Grup profili menüsünden üye ekleme işlemini kullan.'],['Grup profilini kim düzenler?','Bu sürümde grup kurucusu grup adı ve açıklamasını düzenleyebilir.'],['Hikaye ne kadar kalır?','Hikayeler 24 saat görünür.'],['Reels nasıl paylaşırım?','Reels sekmesinden Reels paylaş düğmesine basıp video seç.'],['Kaç günde bir Reels atabilirim?','Her hesap 7 günde bir Reels paylaşabilir.'],['Reels ne kadar saklanır?','Reels videoları 5 ay sonra otomatik temizlenir.'],['Mesajlar ne zaman silinir?','Mesajlar gönderildikten 10 gün sonra otomatik temizlenir.'],['Mesajlarımı geri alabilir miyim?','10 günlük saklama süresi dolduktan sonra mesajlar geri getirilemez.'],['Bildirimleri nasıl açarım?','Profil sekmesindeki bildirimleri aç seçeneğini kullan.'],['Site kapalıyken bildirim gelir mi?','Push izni ve sunucu ayarları açıksa yeni bildirimler gelebilir.'],['Arama nasıl başlatılır?','Sohbeti açıp telefon veya kamera simgesine bas.'],['Ekranımı nasıl paylaşırım?','Arama sırasında ekran paylaşım simgesine bas ve tarayıcıdan ekran seç.'],['Kamerayı nasıl kapatırım?','Arama ekranındaki kamera düğmesine bas.'],['Mikrofonu nasıl kapatırım?','Arama ekranındaki mikrofon düğmesine bas.'],['Birini nasıl takip ederim?','Kişiler sekmesinde kullanıcıyı bulup Takip et’e bas.'],['Neden mesaj atamıyorum?','Birebir mesajlaşma için iki tarafın da birbirini takip etmesi gerekir.'],['Profil fotoğrafımı nasıl değiştiririm?','Profil sekmesinden fotoğraf yükle.'],['Biyografimi nasıl değiştiririm?','Profil bölümündeki biyografi alanını düzenle.'],['Veriler nereye kaydedilir?','Render ayarların uygunsa SQLite veritabanı GitHub’ın veri dalına yedeklenir.'],['Depolama sonsuz mu?','Hayır. Eski mesajlar ve Reels otomatik temizlenerek depolama azaltılır.'],['Sorun yaşarsam ne yapmalıyım?','Sayfayı yenile; sürerse yöneticine /durum sayfasındaki hata bilgisini ilet.']
+];
+function renderAI(){
+ const list=$('#list');
+ list.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;gap:12px;min-height:100%">
+  <div style="display:flex;align-items:center;gap:10px"><div class="av">✨</div><div><h3 style="margin:0">Sohbet AI</h3><small style="color:var(--ok)">Yardım asistanı · hazır cevaplar</small></div></div>
+  <div style="background:var(--panel2);border:1px solid var(--line);border-radius:15px;padding:12px">Merhaba! Sohbet uygulaması hakkında sorularını yanıtlayabilirim. Ne öğrenmek istersin?</div>
+  <input id="aiQ" placeholder="Sohbet AI'ya sor..." autocomplete="off">
+  <div id="aiAnswer" style="display:none;background:linear-gradient(145deg,#34265b,#202637);border-radius:15px;padding:13px;line-height:1.5"></div>
+  <div style="font-size:12px;color:var(--mut)">Hızlı sorular</div><div id="aiQuestions" style="display:grid;grid-template-columns:1fr 1fr;gap:7px"></div>
+  <small style="color:var(--mut)">Not: Bu sürümde yanıtlar uygulama içindeki hazır bilgi bankasından gelir. Gerçek üretken AI için ayrıca bir AI API bağlantısı gerekir.</small>
+ </div>`;
+ const render=()=>{$('#aiQuestions').innerHTML=aiQA.slice(0,12).map((x,i)=>`<button data-ai="${i}" style="text-align:left;font-size:12px;padding:9px">${esc(x[0])}</button>`).join('')};
+ const answer=q=>{const clean=String(q||'').trim().toLocaleLowerCase('tr');if(!clean)return;const exact=aiQA.find(x=>x[0].toLocaleLowerCase('tr').includes(clean)||clean.includes(x[0].toLocaleLowerCase('tr').replace(/[?]/g,''))||x[0].toLocaleLowerCase('tr').split(' ').filter(w=>w.length>3).some(w=>clean.includes(w)));$('#aiAnswer').style.display='block';$('#aiAnswer').innerHTML=`<b>✨ Yanıt</b><div style="margin-top:6px">${esc(exact?exact[1]:'Bu konuda hazır bir yanıtım yok. “Bildirim”, “arama”, “profil”, “Reels” veya “yedekleme” gibi bir başlık deneyebilirsin.')}</div>`};
+ render();$('#aiQuestions').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#aiQ').value=aiQA[+b.dataset.ai][0];answer($('#aiQ').value)});$('#aiQ').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();answer(e.target.value)}};
+}
+
+// ---------- GIF ve çıkartma arama ----------
+async function openGifLibrary(){modal(`<h3>GIF ve çıkartma kütüphanesi</h3><input id="gifQ" placeholder="İsme göre ara..."><div class="bar"><button class="pri" id="gifAdd">＋ GIF/çıkartma yükle</button><span style="color:var(--mut);font-size:12px">Yüklediklerin herkesçe aranabilir</span></div><div id="gifResults"></div>`);const load=async()=>{const a=await api('/gifs?q='+encodeURIComponent($('#gifQ').value));$('#gifResults').innerHTML=a.map(g=>`<div class="item" data-gif="${g.id}"><img src="${esc(g.file)}" style="width:58px;height:58px;object-fit:cover;border-radius:8px"><div class="t"><b>${esc(g.name)}</b><span>${g.kind==='gif'?'GIF':'Çıkartma'} · ${esc(g.username)}</span></div><button class="pri">Gönder</button></div>`).join('')||'<p style="color:var(--mut)">Sonuç bulunamadı.</p>';$('#gifResults').querySelectorAll('[data-gif]').forEach(el=>el.querySelector('button').onclick=async()=>{await api('/gifs/'+el.dataset.gif+'/send',{json:{convId:curConv.id}});closeModal()})};$('#gifQ').oninput=load;$('#gifAdd').onclick=()=>$('#gifUpload').click();await load()}
+$('#gifSearch').onclick=()=>{if(!curConv)return alert('Önce sohbet aç');openGifLibrary()};
+$('#gifUpload').onchange=async e=>{const f=e.target.files[0];if(!f)return;const name=prompt('GIF/çıkartma adı',f.name)||f.name;const fd=new FormData();fd.append('file',f);fd.append('name',name);try{await api('/gifs',{body:fd});openGifLibrary()}catch(er){alert(er.message)}e.target.value=''};
+
+// ---------- Hikayeler ----------
+async function renderStories() {
+  const groups = await api('/stories');
+  $('#list').innerHTML = `<div class="bar"><button class="pri" id="addStory" style="flex:1">+ Hikaye ekle</button><input type="file" id="sFile" accept="image/*,video/*" class="hide"></div>
+   <div class="stories">${groups.map((g, i) => `<div class="story" data-i="${i}"><div class="ring">${avatar(g.user)}</div>${esc(g.user.id === me.id ? 'Hikayem' : g.user.username)}</div>`).join('') || '<span style="color:var(--mut)">Henüz hikaye yok</span>'}</div>
+   <p style="color:var(--mut);padding:0 14px;font-size:13px">Hikayeler 24 saat görünür. Takip ettiklerinin hikayelerini görürsün.</p>`;
+  $('#addStory').onclick = () => $('#sFile').click();
+  $('#sFile').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append('file', f); fd.append('caption', prompt('Yazı eklemek ister misin? (boş bırakabilirsin)') || '');
+    try { await api('/stories', { body: fd }); renderStories(); } catch (er) { alert(er.message); }
+  };
+  document.querySelectorAll('.story').forEach((el) => (el.onclick = () => viewStories(groups[el.dataset.i])));
+}
+function viewStories(g, i = 0) {
+  const s = g.items[i];
+  const v = document.createElement('div'); v.className = 'modal'; v.id = 'viewer';
+  v.innerHTML = `<div style="color:#fff;display:flex;gap:8px;align-items:center">${avatar(g.user, 'sm')}<b>${esc(g.user.username)}</b> <span style="opacity:.6">${fmtTime(s.created_at)}</span> <span style="opacity:.6">${i + 1}/${g.items.length}</span></div>
+   ${s.kind === 'video' ? `<video src="${esc(s.file)}" autoplay controls playsinline></video>` : `<img src="${esc(s.file)}">`}
+   <div style="color:#fff">${esc(s.caption || '')}</div><div><button id="vx">Kapat</button> ${i < g.items.length - 1 ? '<button id="vn" class="pri">Sonraki</button>' : ''}</div>`;
+  $('#modalRoot').innerHTML = ''; $('#modalRoot').appendChild(v);
+  $('#vx').onclick = closeModal;
+  if ($('#vn')) $('#vn').onclick = () => viewStories(g, i + 1);
+}
+
+// ---------- Modal yardımcıları ----------
+function modal(html) { $('#modalRoot').innerHTML = `<div class="modal"><div class="box">${html}<div style="margin-top:12px;text-align:right"><button class="ghost" onclick="closeModal()">Kapat</button></div></div></div>`; }
+function closeModal() { $('#modalRoot').innerHTML = ''; }
+
+async function newGroupModal() {
+  const mu = await api('/mutuals');
+  if (!mu.length) return alert('Önce birkaç kişiyle karşılıklı takipleşmelisin.');
+  modal(`<h3>Yeni grup</h3><input id="gName" placeholder="Grup adı" maxlength="40"><div style="margin:10px 0">${mu.map((u) => `<label class="item"><input type="checkbox" value="${u.id}" style="width:auto"> ${avatar(u, 'sm')} ${esc(u.username)}</label>`).join('')}</div><button class="pri" id="gGo">Oluştur</button>`);
+  $('#gGo').onclick = async () => {
+    const members = [...document.querySelectorAll('.box input[type=checkbox]:checked')].map((c) => +c.value);
+    try { const c = await api('/groups', { json: { name: $('#gName').value, members } }); closeModal(); openConv(c); } catch (e) { alert(e.message); }
+  };
+}
+
+// ---------- Sohbet ----------
+async function openConv(c) {
+  curConv = c;
+  $('#empty').classList.add('hide'); $('#chat').classList.remove('hide');
+  $('#app').classList.add('inchat');
+  $('#chName').textContent = convTitle(c);
+  $('#chAv').outerHTML = convAvatar(c, 'sm').replace('class="av sm"', 'class="av sm" id="chAv"');
+  $('#btnInfo').classList.toggle('hide', c.type !== 'group');
+  const left = c.members.find((m) => m.id === me.id)?.left;
+  $('#composer').classList.toggle('hide', !!left);
+  const msgs = await api(`/convs/${c.id}/messages`);
+  if (curConv !== c) return; // bu sırada başka sohbete geçildi ya da geri dönüldü
+  $('#msgs').innerHTML = '';
+  oldestId = msgs.length ? msgs[0].id : 0;
+  if (msgs.length >= 50) $('#msgs').insertAdjacentHTML('afterbegin', '<button class="ghost" id="more" style="align-self:center">Eski mesajları yükle</button>');
+  msgs.forEach(addMsg);
+  const mb = $('#more'); if (mb) mb.onclick = loadOlder;
+  if (left) $('#msgs').insertAdjacentHTML('beforeend', '<div class="sys">Bu gruptan ayrıldın. Eski mesajlar burada duruyor.</div>');
+  scrollDown();
+  if (tab === 'chats') renderChats();
+}
+$('#back').onclick = () => { $('#app').classList.remove('inchat'); curConv = null; };
+function scrollDown() { const m = $('#msgs'); m.scrollTop = m.scrollHeight; }
+function msgHtml(m) {
+  const mine = m.sender_id === me.id;
+  let body = '';
+  if (m.kind === 'image') body = `<a href="${esc(m.file)}" target="_blank"><img src="${esc(m.file)}" loading="lazy"></a>`;
+  else if (m.kind === 'video') body = `<video src="${esc(m.file)}" controls preload="metadata" playsinline></video>`;
+  else if (m.kind === 'audio') body = `<audio src="${esc(m.file)}" controls></audio>`;
+  else if (m.kind === 'file') body = `<a href="${esc(m.file)}" download="${esc(m.file_name)}">📄 ${esc(m.file_name)}</a>`;
+  if (m.text) body += `<div>${esc(m.text)}</div>`;
+  const who = !mine && curConv.type === 'group' ? `<div class="who">${esc(m.username)}</div>` : '';
+  return `<div class="m ${mine ? 'me' : ''}">${who}${body}<div class="ts">${fmtTime(m.created_at)}</div></div>`;
+}
+function addMsg(m) { $('#msgs').insertAdjacentHTML('beforeend', msgHtml(m)); }
+async function loadOlder() {
+  const btn = $('#more'); if (!btn || !curConv) return;
+  const cv = curConv;
+  const older = await api(`/convs/${cv.id}/messages?before=${oldestId}`);
+  if (curConv !== cv) return;
+  if (older.length) { oldestId = older[0].id; btn.insertAdjacentHTML('afterend', older.map(msgHtml).join('')); }
+  if (older.length < 50) btn.remove();
+}
+function showMessageToast(m){
+  const el=$('#messageToast'); if(!el)return;
+  el.textContent=(m.username||'Yeni mesaj')+': '+(m.text||'Yeni bir dosya gönderdi');
+  el.classList.remove('hide');
+  el.onclick=async()=>{el.classList.add('hide');await loadConvs();const c=convs.find(x=>x.id===m.conv_id);if(c)openConv(c)};
+  clearTimeout(showMessageToast.timer);showMessageToast.timer=setTimeout(()=>el.classList.add('hide'),6500);
+}
+function onMessage(m) {
+  if (document.hidden && swRegistration && Notification.permission === 'granted' && m.sender_id !== me.id) {
+    swRegistration.showNotification(m.username || 'Yeni mesaj', { body: m.text || 'Yeni bir dosya gönderdi', tag: 'msg-' + m.conv_id, data: { url: '/?open=' + m.conv_id } }).catch(() => {});
+  }
+  if (curConv && curConv.id === m.conv_id) { addMsg(m); scrollDown(); }
+  if (tab === 'chats') renderChats();
+}
+async function sendMsg(file) {
+  const text = $('#txt').value.trim();
+  if ((!text && !file) || !curConv) return;
+  const fd = new FormData(); fd.append('text', text); if (file) fd.append('file', file);
+  $('#txt').value = '';
+  try { await api(`/convs/${curConv.id}/messages`, { body: fd }); }
+  catch (e) { if (!file && !$('#txt').value) $('#txt').value = text; alert(e.message); }
+}
+$('#send').onclick = () => sendMsg();
+$('#txt').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } };
+$('#attach').onclick = () => $('#file').click();
+$('#file').onchange = (e) => { if (e.target.files[0]) sendMsg(e.target.files[0]); e.target.value = ''; };
+
+// Kısa videodan GIF üret (istemcide; GIF.js CDN kütüphanesi gerekir).
+$('#makeGif').onclick = () => $('#gifVideo').click();
+$('#gifVideo').onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = ''; if (!file || !curConv) return;
+  if (file.size > 30 * 1024 * 1024) return alert('GIF oluşturmak için en fazla 30 MB video seç.');
+  if (typeof GIF === 'undefined') return alert('GIF oluşturucu yüklenemedi. Sayfayı yenileyip tekrar dene.');
+  const video = document.createElement('video'); video.muted = true; video.playsInline = true; video.preload = 'auto';
+  video.src = URL.createObjectURL(file);
+  try {
+    await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = reject; });
+    const width = Math.min(360, video.videoWidth || 360), height = Math.max(1, Math.round(width * (video.videoHeight || 360) / (video.videoWidth || 360)));
+    const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    const gif = new GIF({ workers: 2, quality: 15, width, height, workerScript: '/vendor/gif/gif.worker.js' });
+    const duration = Math.min(2.5, Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 2.5);
+    for (let t = 0; t < duration; t += 0.12) {
+      if (Math.abs(video.currentTime - t) > 0.001) {
+        await new Promise((resolve) => { const done = () => resolve(); video.addEventListener('seeked', done, { once: true }); video.currentTime = t; });
+      }
+      ctx.drawImage(video, 0, 0, width, height); gif.addFrame(canvas, { copy: true, delay: 120 });
+    }
+    $('#makeGif').textContent = '⏳'; $('#makeGif').disabled = true;
+    const blob = await new Promise((resolve, reject) => { gif.on('finished', resolve); gif.on('abort', reject); gif.render(); });
+    await sendMsg(new File([blob], 'animasyon.gif', { type: 'image/gif' }));
+  } catch (err) { alert('GIF oluşturulamadı: ' + err.message); }
+  finally { $('#makeGif').textContent = 'GIF'; $('#makeGif').disabled = false; URL.revokeObjectURL(video.src); }
+};
+
+// Sesli mesaj kaydı; mevcut audio mesaj türü ve dosya yedeklemesi kullanılır.
+let audioRecorder = null, audioChunks = [], audioStream = null;
+$('#recordAudio').onclick = async () => {
+  if (audioRecorder && audioRecorder.state === 'recording') { audioRecorder.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) return alert('Bu tarayıcı ses kaydını desteklemiyor.');
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true }); audioChunks = [];
+    audioRecorder = new MediaRecorder(audioStream);
+    audioRecorder.ondataavailable = (ev) => { if (ev.data.size) audioChunks.push(ev.data); };
+    audioRecorder.onstop = async () => {
+      audioStream.getTracks().forEach((t) => t.stop()); audioStream = null;
+      $('#recording').classList.add('hide'); $('#recordAudio').textContent = '🎙';
+      const blob = new Blob(audioChunks, { type: audioRecorder.mimeType || 'audio/webm' });
+      if (blob.size && curConv) await sendMsg(new File([blob], 'sesli-mesaj.webm', { type: blob.type }));
+    };
+    audioRecorder.start(); $('#recording').classList.remove('hide'); $('#recordAudio').textContent = '⏹';
+  } catch (err) { alert('Mikrofon izni gerekli: ' + err.message); }
+};
+
+$('#btnInfo').onclick = async () => {
+  const mu = await api('/mutuals');
+  const inConv = new Set(curConv.members.filter((m) => !m.left).map((m) => m.id));
+  const addable = mu.filter((u) => !inConv.has(u.id));
+  modal(`<h3>${esc(curConv.name)}</h3><p style="color:var(--mut)">${esc(curConv.description||'Grup açıklaması yok')}</p>
+   <input id="groupNameEdit" value="${esc(curConv.name)}" maxlength="40" placeholder="Grup adı"><input id="groupDescEdit" value="${esc(curConv.description||'')}" maxlength="300" placeholder="Grup açıklaması" style="margin-top:8px">
+   <button class="ghost" id="groupAvatarBtn" style="margin-top:8px">Grup fotoğrafını değiştir</button><input type="file" id="groupAvatarFile" class="hide" accept="image/*"><button class="pri" id="saveGroupProfile" style="margin-top:8px">Grup profilini kaydet</button>
+   <div style="margin-top:12px">${curConv.members.filter((m) => !m.left).map((m) => `<div class="item">${avatar(m, 'sm')} ${esc(m.username)}</div>`).join('')}</div>
+   ${addable.length ? '<h3 style="margin-top:14px">Kişi ekle</h3>' + addable.map((u) => `<div class="item" data-add="${u.id}">${avatar(u, 'sm')} ${esc(u.username)} <span style="margin-left:auto">➕</span></div>`).join('') : ''}
+   <button class="ghost" id="leave" style="margin-top:12px">Gruptan çık</button>`);
+  $('#groupAvatarBtn').onclick=()=>$('#groupAvatarFile').click();
+  $('#groupAvatarFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);try{await api('/convs/'+curConv.id+'/group-avatar',{body:fd});await loadConvs();curConv=convs.find(c=>c.id===curConv.id)||curConv;closeModal();openConv(curConv)}catch(er){alert(er.message)}};
+  $('#saveGroupProfile').onclick=async()=>{try{curConv=await api('/convs/'+curConv.id+'/group-profile',{method:'PUT',json:{name:$('#groupNameEdit').value,description:$('#groupDescEdit').value}});$('#chName').textContent=curConv.name;closeModal();}catch(e){alert(e.message)}};
+  document.querySelectorAll('[data-add]').forEach((el) => (el.onclick = async () => { await api(`/convs/${curConv.id}/members`, { json: { userId: +el.dataset.add } }); closeModal(); await loadConvs(); openConv(convs.find((c) => c.id === curConv.id)); }));
+  $('#leave').onclick = async () => { await api(`/convs/${curConv.id}/leave`, { method: 'POST' }); closeModal(); await loadConvs(); openConv(convs.find((c) => c.id === curConv.id)); };
+};
+
+// ---------- Sesli / görüntülü arama (WebRTC mesh) ----------
+let ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+let call = null; // { id, stream, video, peers:{sid:{pc,pending}} }
+let pendingCall = null; const peerNames = {};
+let ringTimer = null, ringAudio = null;
+function startRingtone() {
+  stopRingtone();
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+    ringAudio = new Ctx();
+    const beep = () => {
+      if (!ringAudio || ringAudio.state === 'closed') return;
+      const osc = ringAudio.createOscillator(), gain = ringAudio.createGain();
+      osc.frequency.value = 520; gain.gain.value = 0.045; osc.connect(gain); gain.connect(ringAudio.destination);
+      osc.start(); osc.stop(ringAudio.currentTime + 0.22);
+    };
+    ringAudio.resume().then(beep).catch(() => {}); ringTimer = setInterval(beep, 900);
+  } catch {}
+}
+function stopRingtone() {
+  if (ringTimer) clearInterval(ringTimer); ringTimer = null;
+  if (ringAudio) { const a = ringAudio; ringAudio = null; a.close().catch(() => {}); }
+}
+
+async function getStream(video) {
+  try { return await navigator.mediaDevices.getUserMedia({ audio: true, video: video ? { facingMode: 'user' } : false }); }
+  catch (e) { alert('Mikrofon/kamera izni gerekli: ' + e.message); return null; }
+}
+$('#btnVoice').onclick = () => startCall(false);
+$('#btnVideo').onclick = () => startCall(true);
+
+async function startCall(video) {
+  if (call) return alert('Zaten aramadasın');
+  const stream = await getStream(video); if (!stream) return;
+  socket.emit('call:start', { convId: curConv.id, video }, (r) => {
+    if (r.error) { stream.getTracks().forEach((t) => t.stop()); return alert(r.error); }
+    joinCall(r.callId, stream, video);
+  });
+}
+function joinCall(callId, stream, video) {
+  call = { id: callId, stream, video, peers: {} };
+  $('#call').classList.remove('hide');
+  $('#grid').innerHTML = ''; addTile('me', 'Sen', stream, true);
+  $('#cCam').classList.toggle('hide', !video);
+  socket.emit('call:join', { callId }, (r) => {
+    if (r.error) { alert(r.error); return endCall(); }
+    r.peers.forEach((p) => { peerNames[p.sid] = p.username; makePeer(p.sid, true); });
+  });
+}
+function addTile(id, label, stream, muted) {
+  let t = $('#t-' + id);
+  if (!t) { t = document.createElement('div'); t.className = 'tile'; t.id = 't-' + id; t.innerHTML = `<div class="av lg">${esc(label[0] || '?')}</div><video autoplay playsinline></video><div class="lbl">${esc(label)}</div>`; $('#grid').appendChild(t); }
+  const v = t.querySelector('video'); v.srcObject = stream; v.muted = !!muted;
+  if (stream.getVideoTracks().length) t.querySelector('.av').classList.add('hide');
+}
+function makePeer(sid, initiator) {
+  const pc = new RTCPeerConnection(ICE);
+  const peer = { pc, pending: [] }; call.peers[sid] = peer;
+  call.stream.getTracks().forEach((t) => pc.addTrack(t, call.stream));
+  pc.onicecandidate = (e) => e.candidate && socket.emit('signal', { to: sid, data: { candidate: e.candidate } });
+  pc.ontrack = (e) => addTile(sid, peerNames[sid] || 'Kişi', e.streams[0], false);
+  pc.onconnectionstatechange = () => { if (['failed', 'closed'].includes(pc.connectionState)) removePeer(sid); };
+  if (initiator) pc.createOffer().then((o) => pc.setLocalDescription(o)).then(() => socket.emit('signal', { to: sid, data: { desc: pc.localDescription } }));
+  return peer;
+}
+async function onSignal({ from, data }) {
+  if (!call) return;
+  const peer = call.peers[from] || makePeer(from, false);
+  const pc = peer.pc;
+  if (data.desc) {
+    await pc.setRemoteDescription(data.desc);
+    for (const c of peer.pending) await pc.addIceCandidate(c).catch(() => {});
+    peer.pending = [];
+    if (data.desc.type === 'offer') { await pc.setLocalDescription(await pc.createAnswer()); socket.emit('signal', { to: from, data: { desc: pc.localDescription } }); }
+  } else if (data.candidate) {
+    if (pc.remoteDescription) pc.addIceCandidate(data.candidate).catch(() => {}); else peer.pending.push(data.candidate);
+  }
+}
+function removePeer(sid) {
+  if (!call || !call.peers[sid]) return;
+  call.peers[sid].pc.close(); delete call.peers[sid];
+  const t = $('#t-' + sid); if (t) t.remove();
+}
+function endCall() {
+  if (!call) return;
+  socket.emit('call:leave');
+  Object.keys(call.peers).forEach(removePeer);
+  call.stream.getTracks().forEach((t) => t.stop());
+  if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null;}
+  call = null; $('#call').classList.add('hide'); $('#grid').innerHTML = '';
+}
+$('#cEnd').onclick = endCall;
+let screenStream=null;
+$('#cShare').onclick=async()=>{if(!call)return;if(!Object.values(call.peers).some(p=>p.pc.getSenders().some(x=>x.track&&x.track.kind==='video')))return alert('Ekran paylaşımı için görüntülü arama başlatmalısın.');if(screenStream){screenStream.getTracks().forEach(t=>t.stop());return}if(!navigator.mediaDevices?.getDisplayMedia)return alert('Tarayıcı ekran paylaşımını desteklemiyor');try{screenStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});const track=screenStream.getVideoTracks()[0];for(const peer of Object.values(call.peers)){const sender=peer.pc.getSenders().find(x=>x.track&&x.track.kind==='video');if(sender)await sender.replaceTrack(track)}track.onended=async()=>{const cam=call?.stream.getVideoTracks()[0]||null;for(const peer of Object.values(call?.peers||{})){const sender=peer.pc.getSenders().find(x=>x.track&&x.track.kind==='video');if(sender)await sender.replaceTrack(cam)}screenStream=null};}catch(e){screenStream=null;alert('Ekran paylaşımı başlatılamadı: '+e.message)}};
+$('#cMute').onclick = () => { const t = call.stream.getAudioTracks()[0]; t.enabled = !t.enabled; $('#cMute').textContent = t.enabled ? '🎤' : '🔇'; };
+$('#cCam').onclick = () => { const t = call.stream.getVideoTracks()[0]; if (t) { t.enabled = !t.enabled; $('#cCam').textContent = t.enabled ? '📷' : '🚫'; } };
+$('#cAdd').onclick = async () => {
+  const mu = await api('/mutuals');
+  const root = document.createElement('div'); root.className = 'modal'; root.style.zIndex = 80;
+  root.innerHTML = `<div class="box"><h3>Aramaya ekle</h3>${mu.map((u) => `<div class="item" data-u="${u.id}">${avatar(u, 'sm')} ${esc(u.username)} <span style="margin-left:auto">📞</span></div>`).join('') || '<p>Karşılıklı takipleştiğin kimse yok</p>'}<div style="text-align:right;margin-top:10px"><button class="ghost" id="ax">Kapat</button></div></div>`;
+  document.body.appendChild(root);
+  $('#ax', root).onclick = () => root.remove();
+  root.querySelectorAll('[data-u]').forEach((el) => (el.onclick = () => socket.emit('call:invite', { callId: call.id, userId: +el.dataset.u }, (r) => { if (r.error) alert(r.error); else { el.querySelector('span').textContent = '✓ aranıyor'; } })));
+};
+
+function showIncoming(c) {
+  if (call) return;
+  if (!document.hidden) startRingtone();
+  if (document.hidden && swRegistration && Notification.permission === 'granted') {
+    swRegistration.showNotification('Gelen ' + (c.video ? 'görüntülü' : 'sesli') + ' arama', { body: (c.from.username || 'Birisi') + ' seni arıyor', tag: 'call-' + c.callId, requireInteraction: true, data: { url: '/?incomingCall=' + encodeURIComponent(c.callId) + '&video=' + (c.video ? '1' : '0') + '&from=' + encodeURIComponent(c.from.username || '') } }).catch(() => {});
+  }
+  pendingCall = c;
+  const box = $('#incoming');
+  box.classList.remove('hide');
+  box.innerHTML = `<div><b>${esc(c.from.username)}</b><br><span style="color:var(--mut)">${c.convName ? esc(c.convName) + ' · ' : ''}${c.video ? 'Görüntülü' : 'Sesli'} arama</span></div>
+   <button class="pri" id="acc">Cevapla</button><button id="dec">Reddet</button>`;
+  $('#acc').onclick = async () => { const p = pendingCall; hideIncoming(); const s = await getStream(p.video); if (s) joinCall(p.callId, s, p.video); };
+  $('#dec').onclick = hideIncoming;
+}
+function hideIncoming() { stopRingtone(); pendingCall = null; $('#incoming').classList.add('hide'); }
+
+boot();

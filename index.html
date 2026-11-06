@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e1116">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>Sohbet</title>
 <style>
 :root{--bg:#0e1116;--panel:#161b22;--panel2:#1d242d;--line:#2a323d;--text:#e8edf2;--mut:#8a96a3;--acc:#7c5cff;--acc2:#ff4d8d;--ok:#2ecc71}
@@ -55,7 +57,9 @@ input:focus,textarea:focus{border-color:var(--acc)}
 .m a{color:#fff}
 .sys{align-self:center;color:var(--mut);font-size:12px}
 #composer{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--panel);align-items:center}
-#composer textarea{resize:none;height:42px;max-height:120px}
+#composer textarea{resize:none;height:42px;max-height:120px;flex:1;min-width:0;width:0}
+#composer button{padding:8px 10px;white-space:nowrap}
+#recording{font-size:12px;color:#ff7373;padding:0 8px}
 .pad{padding:16px;overflow:auto}
 .stories{display:flex;gap:14px;overflow:auto;padding:12px}
 .story{display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;font-size:12px;width:70px}
@@ -76,18 +80,6 @@ input:focus,textarea:focus{border-color:var(--acc)}
 #ctl button{border-radius:50%;width:52px;height:52px;padding:0;font-size:20px}
 #ctl .end{background:#e03e3e}
 #incoming{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:70;background:var(--panel);border:1px solid var(--acc);border-radius:16px;padding:14px 18px;display:flex;gap:12px;align-items:center;box-shadow:0 10px 40px #000a}
-#chat{position:relative}
-#toBottom{position:absolute;right:16px;bottom:74px;width:44px;height:44px;border-radius:50%;padding:0;font-size:20px;background:var(--acc);box-shadow:0 4px 16px #0008;z-index:5}
-#toBottom .bd{position:absolute;top:-6px;right:-4px;background:var(--acc2);border-radius:10px;font-size:11px;padding:1px 6px;min-width:18px}
-#composer button{padding:8px 10px;flex:none}
-#emoji{position:absolute;left:10px;bottom:68px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:8px;display:grid;grid-template-columns:repeat(8,1fr);gap:2px;max-width:92vw;z-index:6;max-height:240px;overflow:auto}
-#emoji button{background:none;font-size:22px;padding:4px}
-.gifgrid{columns:2;gap:6px;margin-top:10px}
-.gifgrid img{width:100%;border-radius:8px;margin-bottom:6px;cursor:pointer;display:block;background:var(--panel2);min-height:50px}
-.rec{background:#e03e3e!important;animation:pulse 1s infinite}
-@keyframes pulse{50%{opacity:.55}}
-.m img.gif{max-height:260px}
-.drop{outline:3px dashed var(--acc);outline-offset:-8px}
 @media(max-width:760px){
  #app{grid-template-columns:1fr}
  #main{display:none}
@@ -120,6 +112,8 @@ input:focus,textarea:focus{border-color:var(--acc)}
   <div id="tabs">
    <button data-t="chats" class="on">Sohbetler</button>
    <button data-t="stories">Hikayeler</button>
+   <button data-t="reels">Reels</button>
+   <button data-t="ai">AI</button>
    <button data-t="people">Kişiler</button>
    <button data-t="me">Profil</button>
   </div>
@@ -134,17 +128,18 @@ input:focus,textarea:focus{border-color:var(--acc)}
     <div class="name" id="chName"></div>
     <button id="btnVoice" title="Sesli ara">📞</button>
     <button id="btnVideo" title="Görüntülü ara">🎥</button>
-    <button id="btnInfo" title="Grup">⋯</button>
+    <button id="btnInfo" title="Grup profili">⋯</button>
    </div>
    <div id="msgs"></div>
-   <button id="toBottom" class="hide" title="En alta in">⬇<span class="bd hide" id="tbN"></span></button>
-   <div id="emoji" class="hide"></div>
    <div id="composer">
-    <button id="emojiBtn" title="Emoji">😊</button>
-    <button id="gifBtn" title="GIF">GIF</button>
-    <button id="attach" title="Dosya / foto / video / belge">📎</button>
-    <input type="file" id="file" class="hide" multiple>
-    <button id="recBtn" title="Sesli mesaj">🎙️</button>
+    <button id="attach" title="Dosya / foto / video / GIF">📎</button>
+    <input type="file" id="file" class="hide" accept="image/*,image/gif,video/*,audio/*,.pdf,.doc,.docx,.zip,.txt">
+    <button id="makeGif" title="Videodan GIF oluştur">GIF oluştur</button>
+    <button id="gifSearch" title="GIF ve çıkartma ara">✨</button>
+    <input type="file" id="gifUpload" class="hide" accept="image/gif,image/png,image/webp,image/jpeg">
+    <input type="file" id="gifVideo" class="hide" accept="video/*">
+    <button id="recordAudio" title="Sesli mesaj kaydet">🎙</button>
+    <span id="recording" class="hide">● Kayıt</span>
     <textarea id="txt" placeholder="Mesaj yaz..."></textarea>
     <button class="pri" id="send">Gönder</button>
    </div>
@@ -160,15 +155,16 @@ input:focus,textarea:focus{border-color:var(--acc)}
  <div id="ctl">
   <button id="cMute" title="Mikrofon">🎤</button>
   <button id="cCam" title="Kamera">📷</button>
-  <button id="cFlip" title="Kamerayı çevir">🔄</button>
-  <button id="cScreen" title="Ekran paylaş">🖥️</button>
   <button id="cAdd" title="Aramaya kişi ekle">➕</button>
+  <button id="cShare" title="Ekran paylaş">🖥</button>
   <button id="cEnd" class="end" title="Kapat">📵</button>
  </div>
 </div>
 <div id="incoming" class="hide"></div>
+<div id="messageToast" class="hide" style="position:fixed;top:14px;right:14px;z-index:69;max-width:min(360px,calc(100vw - 28px));background:var(--panel);border:1px solid var(--acc);border-radius:14px;padding:12px 15px;box-shadow:0 10px 35px #0009;cursor:pointer"></div>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/vendor/gif/gif.js"></script>
 <script>
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -228,14 +224,82 @@ async function boot() {
   $('#authSub').textContent = 'Bir isim seç, hemen başla.';
 }
 
+let swRegistration = null;
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  alert('Sohbet ana ekrana eklendi!');
+});
+function deviceFamily() {
+  const ua = navigator.userAgent || '';
+  if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/i.test(ua)) return 'android';
+  if (/Windows/i.test(ua)) return 'windows';
+  return 'other';
+}
+async function installSite(target) {
+  const family = deviceFamily();
+  if (target === 'ios' || family === 'ios') {
+    alert('iPhone/iPad: Safari ile bu siteyi aç. Alttaki Paylaş düğmesine dokun, “Ana Ekrana Ekle” seçeneğini seç ve Ekle’ye bas.');
+    return;
+  }
+  if (deferredInstallPrompt && (target === family || target === 'android' || target === 'windows')) {
+    deferredInstallPrompt.prompt();
+    const result = await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    if (result && result.outcome === 'accepted') alert('Sohbet ana ekrana/uygulamalar listesine ekleniyor.');
+    return;
+  }
+  if (target === 'android') {
+    alert('Android: Chrome menüsünü (⋮) açıp “Uygulamayı yükle” veya “Ana ekrana ekle” seçeneğine dokun.');
+  } else if (target === 'windows') {
+    alert('Windows: Edge veya Chrome menüsünü aç. “Uygulamalar” > “Bu siteyi uygulama olarak yükle” (Edge) ya da “Sohbet’i yükle” (Chrome) seçeneğini kullan.');
+  } else {
+    alert('Tarayıcı menüsünden “Ana ekrana ekle” veya “Uygulamayı yükle” seçeneğini kullan.');
+  }
+}
+async function setupPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window))
+    throw new Error('Bu tarayıcı push bildirimlerini desteklemiyor');
+  const cfg = await api('/push/key');
+  if (!cfg.enabled || !cfg.publicKey) throw new Error('Sunucu tarafında VAPID anahtarları ayarlanmamış');
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Bildirim izni verilmedi');
+  swRegistration = await navigator.serviceWorker.register('/sw.js');
+  let sub = await swRegistration.pushManager.getSubscription();
+  if (!sub) sub = await swRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(cfg.publicKey) });
+  await api('/push/subscribe', { json: { subscription: sub.toJSON() } });
+  return true;
+}
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64); return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
 function start(user) {
   me = user;
   $('#auth').classList.add('hide'); $('#app').classList.remove('hide');
   socket = io({ auth: { token } });
   socket.on('message', onMessage);
   let firstConnect = true;
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').then((r) => { swRegistration = r; }).catch(() => {});
   socket.on('connect', async () => {
-    if (firstConnect) { firstConnect = false; return; }
+    const params = new URLSearchParams(location.search);
+    const incomingId = params.get('incomingCall');
+    if (incomingId && !pendingCall) { showIncoming({ callId: incomingId, convId: Number(params.get('open') || 0), video: params.get('video') === '1', from: { username: params.get('from') || 'Arayan kişi' } }); history.replaceState({}, '', '/'); }
+    if (firstConnect) {
+      firstConnect = false;
+      const profileName = params.get('profile');
+      if (profileName) { try { const found = await api('/users?q=' + encodeURIComponent(profileName)); const targetUser = found.find(x => x.username.toLowerCase() === profileName.toLowerCase()); if (targetUser) profileModal(targetUser.id); } catch {} }
+      const openId = Number(params.get('open') || 0);
+      if (openId) { try { await loadConvs(); const target = convs.find((c) => c.id === openId); if (target) openConv(target); } catch {} }
+      return;
+    }
     try {
       await loadConvs();
       const open = curConv && convs.find((x) => x.id === curConv.id);
@@ -258,7 +322,7 @@ document.querySelectorAll('#tabs button').forEach((b) => (b.onclick = () => {
   tab = b.dataset.t; renderTab();
 }));
 function renderTab() {
-  ({ chats: renderChats, stories: renderStories, people: renderPeople, me: renderMe })[tab]();
+  ({ chats: renderChats, stories: renderStories, reels: renderReels, ai: renderAI, people: renderPeople, me: renderMe })[tab]();
 }
 async function loadConvs() { convs = await api('/convs'); }
 
@@ -268,7 +332,7 @@ function convTitle(c) {
   return o ? o.username : 'Sohbet';
 }
 function convAvatar(c, cls) {
-  if (c.type === 'group') return `<div class="av ${cls || ''}">👥</div>`;
+  if (c.type === 'group') return `<div class="av ${cls || ''}">${c.avatar ? `<img src="${esc(c.avatar)}">` : '👥'}</div>`;
   return avatar(c.members.find((m) => m.id !== me.id), cls);
 }
 function preview(m) {
@@ -325,13 +389,65 @@ async function renderMe() {
     <h3 style="margin:0">${esc(d.user.username)}</h3>
     <textarea id="bio" placeholder="Biyografi" maxlength="200">${esc(d.user.bio || '')}</textarea>
     <button class="pri" id="saveBio">Kaydet</button>
+    <button class="ghost" id="enablePush">🔔 Bildirimleri aç</button>
+    <div style="font-size:12px;color:var(--mut)">Site açık değilken mesaj ve arama bildirimi alabilmek için bildirim izni ver.</div>
+    <div style="width:100%;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:12px;margin-top:8px">
+      <b>📲 Sohbet’i cihazına ekle</b>
+      <div style="font-size:12px;color:var(--mut);margin:5px 0 10px">Bu düğmeler aynı web sitesini cihazının uygulamaları arasına ekler.</div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px">
+        <button class="ghost" id="installAndroid">🤖 Android</button>
+        <button class="ghost" id="installIOS">🍎 iOS</button>
+        <button class="ghost" id="installWindows">🪟 Windows</button>
+      </div>
+    </div>
     <div style="font-size:12px;color:var(--mut);margin-top:10px">Başka cihazdan girmek için giriş kodun:</div>
     <input readonly value="${esc(d.token)}" onclick="this.select()">
     <button class="ghost" id="logout">Çıkış yap</button></div>`;
-  $('#avFile').onchange = async (e) => { const fd = new FormData(); fd.append('file', await squareImage(e.target.files[0]), 'profil.jpg'); try { await api('/avatar', { body: fd }); me.avatar = (await api('/me')).user.avatar; renderMe(); } catch (er) { alert(er.message); } };
+  $('#avFile').onchange = async (e) => { const fd = new FormData(); fd.append('file', e.target.files[0]); try { await api('/avatar', { body: fd }); me.avatar = (await api('/me')).user.avatar; renderMe(); } catch (er) { alert(er.message); } };
   $('#saveBio').onclick = async () => { await api('/profile', { method: 'PUT', json: { bio: $('#bio').value } }); alert('Kaydedildi'); };
+  $('#enablePush').onclick = async () => { try { await setupPush(); alert('Bildirimler açıldı!'); } catch (e) { alert(e.message); } };
+  $('#installAndroid').onclick = () => installSite('android');
+  $('#installIOS').onclick = () => installSite('ios');
+  $('#installWindows').onclick = () => installSite('windows');
   $('#logout').onclick = () => { if (confirm('Çıkış yapılsın mı? Giriş kodunu not aldığından emin ol.')) { localStorage.removeItem('token'); location.reload(); } };
 }
+
+// ---------- Reels akışı ----------
+async function renderReels() {
+  const list=$('#list');
+  list.innerHTML=`<div class="bar"><button class="pri" id="reelAdd">＋ Reels paylaş</button><input type="file" id="reelFile" class="hide" accept="video/*"></div><div id="reelFeed"><p style="padding:14px;color:var(--mut)">Reels yükleniyor…</p></div>`;
+  $('#reelAdd').onclick=()=>$('#reelFile').click();
+  $('#reelFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);fd.append('caption',prompt('Reels açıklaması')||'');try{await api('/reels',{body:fd});renderReels();}catch(er){alert(er.message)}e.target.value=''};
+  const rows=await api('/reels');
+  $('#reelFeed').innerHTML=rows.map(r=>`<article class="item" style="display:block;margin:10px;border:1px solid var(--line)"><div style="display:flex;align-items:center;gap:8px">${avatar(r)}<b>${esc(r.username)}</b></div><video src="${esc(r.file)}" controls playsinline preload="metadata" style="width:100%;max-height:440px;object-fit:contain;background:#000;margin-top:8px;border-radius:12px"></video><p>${esc(r.caption||'')}</p><div class="bar"><button data-like="${r.id}">${r.liked?'❤️':'🤍'} ${r.likes}</button><button data-comment="${r.id}">💬 ${r.comments}</button><button data-share="${r.id}">↗ Paylaş</button></div></article>`).join('')||'<p style="padding:14px;color:var(--mut)">Henüz Reels yok. İlk videoyu sen paylaş!</p>';
+  $('#reelFeed').querySelectorAll('[data-like]').forEach(b=>b.onclick=async()=>{await api('/reels/'+b.dataset.like+'/like',{method:'POST'});renderReels()});
+  $('#reelFeed').querySelectorAll('[data-comment]').forEach(b=>b.onclick=async()=>{const id=b.dataset.comment;const comments=await api('/reels/'+id+'/comments');const val=prompt('Yorumlar:\n'+comments.map(c=>c.username+': '+c.text).join('\n')+'\n\nYeni yorum yaz:');if(val){await api('/reels/'+id+'/comments',{json:{text:val}});renderReels()}});
+  $('#reelFeed').querySelectorAll('[data-share]').forEach(b=>b.onclick=()=>{const r=rows.find(x=>x.id==b.dataset.share);navigator.clipboard?.writeText(location.origin+r.file).then(()=>alert('Reels bağlantısı kopyalandı')).catch(()=>prompt('Bağlantı',location.origin+r.file))});
+}
+
+// ---------- Uygulama içi AI: 30 hazır soru-cevap ----------
+const aiQA=[
+['Nasıl hesap açarım?','Kullanıcı adını yazıp Başla düğmesine bas.'],['Giriş kodum nedir?','Profil sekmende görünen giriş kodunu güvenli yerde sakla.'],['Başka cihazdan nasıl girerim?','Aynı kullanıcı adını ve profilindeki giriş kodunu kullan.'],['Nasıl mesaj gönderirim?','Sohbet aç, alttaki kutuya yaz ve Gönder’e bas.'],['Dosya nasıl gönderirim?','Sohbette ataş simgesine basıp dosya seç.'],['GIF nasıl gönderirim?','GIF/çıkartma ara düğmesinden kütüphaneyi aç veya GIF oluştur.'],['Kendi GIF’imi nasıl eklerim?','GIF kütüphanesini açıp yükle seçeneğiyle GIF veya görsel ekle.'],['Çıkartma nasıl bulurum?','Kütüphanede adını aratabilirsin.'],['Grup nasıl kurarım?','Sohbetler sekmesinde Yeni grup düğmesine bas.'],['Gruba kişi nasıl eklerim?','Grup profili menüsünden üye ekleme işlemini kullan.'],['Grup profilini kim düzenler?','Bu sürümde grup kurucusu grup adı ve açıklamasını düzenleyebilir.'],['Hikaye ne kadar kalır?','Hikayeler 24 saat görünür.'],['Reels nasıl paylaşırım?','Reels sekmesinden Reels paylaş düğmesine basıp video seç.'],['Kaç günde bir Reels atabilirim?','Her hesap 7 günde bir Reels paylaşabilir.'],['Reels ne kadar saklanır?','Reels videoları 5 ay sonra otomatik temizlenir.'],['Mesajlar ne zaman silinir?','Mesajlar gönderildikten 10 gün sonra otomatik temizlenir.'],['Mesajlarımı geri alabilir miyim?','10 günlük saklama süresi dolduktan sonra mesajlar geri getirilemez.'],['Bildirimleri nasıl açarım?','Profil sekmesindeki bildirimleri aç seçeneğini kullan.'],['Site kapalıyken bildirim gelir mi?','Push izni ve sunucu ayarları açıksa yeni bildirimler gelebilir.'],['Arama nasıl başlatılır?','Sohbeti açıp telefon veya kamera simgesine bas.'],['Ekranımı nasıl paylaşırım?','Arama sırasında ekran paylaşım simgesine bas ve tarayıcıdan ekran seç.'],['Kamerayı nasıl kapatırım?','Arama ekranındaki kamera düğmesine bas.'],['Mikrofonu nasıl kapatırım?','Arama ekranındaki mikrofon düğmesine bas.'],['Birini nasıl takip ederim?','Kişiler sekmesinde kullanıcıyı bulup Takip et’e bas.'],['Neden mesaj atamıyorum?','Birebir mesajlaşma için iki tarafın da birbirini takip etmesi gerekir.'],['Profil fotoğrafımı nasıl değiştiririm?','Profil sekmesinden fotoğraf yükle.'],['Biyografimi nasıl değiştiririm?','Profil bölümündeki biyografi alanını düzenle.'],['Veriler nereye kaydedilir?','Render ayarların uygunsa SQLite veritabanı GitHub’ın veri dalına yedeklenir.'],['Depolama sonsuz mu?','Hayır. Eski mesajlar ve Reels otomatik temizlenerek depolama azaltılır.'],['Sorun yaşarsam ne yapmalıyım?','Sayfayı yenile; sürerse yöneticine /durum sayfasındaki hata bilgisini ilet.']
+];
+function renderAI(){
+ const list=$('#list');
+ list.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;gap:12px;min-height:100%">
+  <div style="display:flex;align-items:center;gap:10px"><div class="av">✨</div><div><h3 style="margin:0">Sohbet AI</h3><small style="color:var(--ok)">Yardım asistanı · hazır cevaplar</small></div></div>
+  <div style="background:var(--panel2);border:1px solid var(--line);border-radius:15px;padding:12px">Merhaba! Sohbet uygulaması hakkında sorularını yanıtlayabilirim. Ne öğrenmek istersin?</div>
+  <input id="aiQ" placeholder="Sohbet AI'ya sor..." autocomplete="off">
+  <div id="aiAnswer" style="display:none;background:linear-gradient(145deg,#34265b,#202637);border-radius:15px;padding:13px;line-height:1.5"></div>
+  <div style="font-size:12px;color:var(--mut)">Hızlı sorular</div><div id="aiQuestions" style="display:grid;grid-template-columns:1fr 1fr;gap:7px"></div>
+  <small style="color:var(--mut)">Not: Bu sürümde yanıtlar uygulama içindeki hazır bilgi bankasından gelir. Gerçek üretken AI için ayrıca bir AI API bağlantısı gerekir.</small>
+ </div>`;
+ const render=()=>{$('#aiQuestions').innerHTML=aiQA.slice(0,12).map((x,i)=>`<button data-ai="${i}" style="text-align:left;font-size:12px;padding:9px">${esc(x[0])}</button>`).join('')};
+ const answer=q=>{const clean=String(q||'').trim().toLocaleLowerCase('tr');if(!clean)return;const exact=aiQA.find(x=>x[0].toLocaleLowerCase('tr').includes(clean)||clean.includes(x[0].toLocaleLowerCase('tr').replace(/[?]/g,''))||x[0].toLocaleLowerCase('tr').split(' ').filter(w=>w.length>3).some(w=>clean.includes(w)));$('#aiAnswer').style.display='block';$('#aiAnswer').innerHTML=`<b>✨ Yanıt</b><div style="margin-top:6px">${esc(exact?exact[1]:'Bu konuda hazır bir yanıtım yok. “Bildirim”, “arama”, “profil”, “Reels” veya “yedekleme” gibi bir başlık deneyebilirsin.')}</div>`};
+ render();$('#aiQuestions').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#aiQ').value=aiQA[+b.dataset.ai][0];answer($('#aiQ').value)});$('#aiQ').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();answer(e.target.value)}};
+}
+
+// ---------- GIF ve çıkartma arama ----------
+async function openGifLibrary(){modal(`<h3>GIF ve çıkartma kütüphanesi</h3><input id="gifQ" placeholder="İsme göre ara..."><div class="bar"><button class="pri" id="gifAdd">＋ GIF/çıkartma yükle</button><span style="color:var(--mut);font-size:12px">Yüklediklerin herkesçe aranabilir</span></div><div id="gifResults"></div>`);const load=async()=>{const a=await api('/gifs?q='+encodeURIComponent($('#gifQ').value));$('#gifResults').innerHTML=a.map(g=>`<div class="item" data-gif="${g.id}"><img src="${esc(g.file)}" style="width:58px;height:58px;object-fit:cover;border-radius:8px"><div class="t"><b>${esc(g.name)}</b><span>${g.kind==='gif'?'GIF':'Çıkartma'} · ${esc(g.username)}</span></div><button class="pri">Gönder</button></div>`).join('')||'<p style="color:var(--mut)">Sonuç bulunamadı.</p>';$('#gifResults').querySelectorAll('[data-gif]').forEach(el=>el.querySelector('button').onclick=async()=>{await api('/gifs/'+el.dataset.gif+'/send',{json:{convId:curConv.id}});closeModal()})};$('#gifQ').oninput=load;$('#gifAdd').onclick=()=>$('#gifUpload').click();await load()}
+$('#gifSearch').onclick=()=>{if(!curConv)return alert('Önce sohbet aç');openGifLibrary()};
+$('#gifUpload').onchange=async e=>{const f=e.target.files[0];if(!f)return;const name=prompt('GIF/çıkartma adı',f.name)||f.name;const fd=new FormData();fd.append('file',f);fd.append('name',name);try{await api('/gifs',{body:fd});openGifLibrary()}catch(er){alert(er.message)}e.target.value=''};
 
 // ---------- Hikayeler ----------
 async function renderStories() {
@@ -394,32 +510,11 @@ async function openConv(c) {
   if (tab === 'chats') renderChats();
 }
 $('#back').onclick = () => { $('#app').classList.remove('inchat'); curConv = null; };
-function scrollDown() { const m = $('#msgs'); m.scrollTop = m.scrollHeight; unreadBelow = 0; updBottom(); }
-let unreadBelow = 0;
-const nearBottom = () => { const m = $('#msgs'); return m.scrollHeight - m.scrollTop - m.clientHeight < 120; };
-function updBottom() {
-  const far = !nearBottom(), n = $('#tbN');
-  $('#toBottom').classList.toggle('hide', !far);
-  n.textContent = unreadBelow; n.classList.toggle('hide', !unreadBelow);
-}
-$('#msgs').addEventListener('scroll', () => { if (nearBottom()) unreadBelow = 0; updBottom(); });
-$('#toBottom').onclick = () => { const m = $('#msgs'); m.scrollTo({ top: m.scrollHeight, behavior: 'smooth' }); unreadBelow = 0; setTimeout(updBottom, 400); };
-// Her fotoğraf/video, ne boyutta olursa olsun, profil için ortadan kareye kırpılıp 512x512 yapılır
-async function squareImage(file, size = 512) {
-  try {
-    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    const s = Math.min(bmp.width, bmp.height);
-    const c = document.createElement('canvas'); c.width = c.height = size;
-    const g = c.getContext('2d'); g.fillStyle = '#1d242d'; g.fillRect(0, 0, size, size);
-    g.imageSmoothingQuality = 'high';
-    g.drawImage(bmp, (bmp.width - s) / 2, (bmp.height - s) / 2, s, s, 0, 0, size, size);
-    return await new Promise((ok, no) => c.toBlob((b) => (b ? ok(b) : no()), 'image/jpeg', 0.9));
-  } catch { return file; }
-}
+function scrollDown() { const m = $('#msgs'); m.scrollTop = m.scrollHeight; }
 function msgHtml(m) {
   const mine = m.sender_id === me.id;
   let body = '';
-  if (m.kind === 'image') body = `<a href="${esc(m.file)}" target="_blank"><img class="${/\.gif$/i.test(m.file) ? 'gif' : ''}" src="${esc(m.file)}" loading="lazy" onload="this.closest('#msgs')&&window.__imgLoaded&&window.__imgLoaded()"></a>`;
+  if (m.kind === 'image') body = `<a href="${esc(m.file)}" target="_blank"><img src="${esc(m.file)}" loading="lazy"></a>`;
   else if (m.kind === 'video') body = `<video src="${esc(m.file)}" controls preload="metadata" playsinline></video>`;
   else if (m.kind === 'audio') body = `<audio src="${esc(m.file)}" controls></audio>`;
   else if (m.kind === 'file') body = `<a href="${esc(m.file)}" download="${esc(m.file_name)}">📄 ${esc(m.file_name)}</a>`;
@@ -436,12 +531,18 @@ async function loadOlder() {
   if (older.length) { oldestId = older[0].id; btn.insertAdjacentHTML('afterend', older.map(msgHtml).join('')); }
   if (older.length < 50) btn.remove();
 }
+function showMessageToast(m){
+  const el=$('#messageToast'); if(!el)return;
+  el.textContent=(m.username||'Yeni mesaj')+': '+(m.text||'Yeni bir dosya gönderdi');
+  el.classList.remove('hide');
+  el.onclick=async()=>{el.classList.add('hide');await loadConvs();const c=convs.find(x=>x.id===m.conv_id);if(c)openConv(c)};
+  clearTimeout(showMessageToast.timer);showMessageToast.timer=setTimeout(()=>el.classList.add('hide'),6500);
+}
 function onMessage(m) {
-  if (curConv && curConv.id === m.conv_id) {
-    const stick = nearBottom() || m.sender_id === me.id;
-    addMsg(m);
-    if (stick) scrollDown(); else { unreadBelow++; updBottom(); }
+  if (document.hidden && swRegistration && Notification.permission === 'granted' && m.sender_id !== me.id) {
+    swRegistration.showNotification(m.username || 'Yeni mesaj', { body: m.text || 'Yeni bir dosya gönderdi', tag: 'msg-' + m.conv_id, data: { url: '/?open=' + m.conv_id } }).catch(() => {});
   }
+  if (curConv && curConv.id === m.conv_id) { addMsg(m); scrollDown(); }
   if (tab === 'chats') renderChats();
 }
 async function sendMsg(file) {
@@ -455,71 +556,68 @@ async function sendMsg(file) {
 $('#send').onclick = () => sendMsg();
 $('#txt').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } };
 $('#attach').onclick = () => $('#file').click();
-window.__imgLoaded = () => { if (stickNext) scrollDown(); };
-let stickNext = false;
-async function sendFiles(files) {
-  for (const f of files) { stickNext = true; await sendMsg(f); }
-  setTimeout(() => (stickNext = false), 1500);
-}
-$('#file').onchange = (e) => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) sendFiles(fs); };
-// Panodan yapıştır / sürükle-bırak
-$('#txt').addEventListener('paste', (e) => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); sendFiles(fs); } });
-['dragover', 'drop'].forEach((ev) => $('#chat').addEventListener(ev, (e) => {
-  e.preventDefault(); $('#chat').classList.toggle('drop', ev === 'dragover');
-  if (ev === 'drop') { const fs = [...e.dataTransfer.files]; if (fs.length) sendFiles(fs); }
-}));
-$('#chat').addEventListener('dragleave', () => $('#chat').classList.remove('drop'));
-// Emoji
-const EMOJIS = '😀😁😂🤣😊😍😘😎🤩🥳😢😭😡🤔🙄😴🤗😅😉🙃😇🥰😜🤪😬😱🤯👍👎👏🙏💪🔥✨💯❤️💔💜💙💚🎉🎂🎁⚽🏀🎮🎵📸☕🍕🍔🌹🌍🚀⭐☀️🌙🐱🐶🦁🐼'.match(/\p{Extended_Pictographic}(\uFE0F)?/gu);
-$('#emoji').innerHTML = EMOJIS.map((e) => `<button>${e}</button>`).join('');
-$('#emojiBtn').onclick = (e) => { e.stopPropagation(); $('#emoji').classList.toggle('hide'); };
-$('#emoji').onclick = (e) => { if (e.target.tagName === 'BUTTON') { const t = $('#txt'); t.value += e.target.textContent; t.focus(); } };
-document.addEventListener('click', (e) => { if (!e.target.closest('#emoji')) $('#emoji').classList.add('hide'); });
-// GIF
-$('#gifBtn').onclick = () => {
-  modal(`<h3>GIF gönder</h3><input id="gq" placeholder="GIF ara... (ör. komik, kedi)"><div style="margin-top:8px"><button class="ghost" id="gdev">📁 Cihazdan GIF seç</button></div><div id="gres" class="gifgrid"></div><input type="file" id="gfile" accept="image/gif" class="hide">`);
-  const load = async () => {
-    try {
-      const r = await api('/gifs?q=' + encodeURIComponent($('#gq').value.trim()));
-      if (r.error) { $('#gres').outerHTML = `<p id="gres" style="color:var(--mut)">${esc(r.error)}</p>`; return; }
-      $('#gres').innerHTML = r.items.map((g) => `<img src="${esc(g.preview)}" data-u="${esc(g.url)}" loading="lazy">`).join('') || '<p style="color:var(--mut)">Sonuç yok</p>';
-    } catch (e) { $('#gres').innerHTML = `<p style="color:var(--mut)">${esc(e.message)}</p>`; }
-  };
-  let tm; $('#gq').oninput = () => { clearTimeout(tm); tm = setTimeout(load, 400); };
-  $('#gdev').onclick = () => $('#gfile').click();
-  $('#gfile').onchange = (e) => { const f = e.target.files[0]; if (f) { closeModal(); sendFiles([f]); } };
-  $('#gres').onclick = async (e) => {
-    const u = e.target.dataset && e.target.dataset.u; if (!u) return;
-    try { const b = await (await fetch(u)).blob(); closeModal(); sendFiles([new File([b], 'gif.gif', { type: 'image/gif' })]); }
-    catch { alert('GIF indirilemedi'); }
-  };
-  load();
-};
-// Sesli mesaj
-let rec = null;
-$('#recBtn').onclick = async () => {
-  if (rec) { rec.stop(); return; }
+$('#file').onchange = (e) => { if (e.target.files[0]) sendMsg(e.target.files[0]); e.target.value = ''; };
+
+// Kısa videodan GIF üret (istemcide; GIF.js CDN kütüphanesi gerekir).
+$('#makeGif').onclick = () => $('#gifVideo').click();
+$('#gifVideo').onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = ''; if (!file || !curConv) return;
+  if (file.size > 30 * 1024 * 1024) return alert('GIF oluşturmak için en fazla 30 MB video seç.');
+  if (typeof GIF === 'undefined') return alert('GIF oluşturucu yüklenemedi. Sayfayı yenileyip tekrar dene.');
+  const video = document.createElement('video'); video.muted = true; video.playsInline = true; video.preload = 'auto';
+  video.src = URL.createObjectURL(file);
   try {
-    const st = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mt = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
-    const mr = new MediaRecorder(st, mt ? { mimeType: mt } : undefined), chunks = [];
-    mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    mr.onstop = () => {
-      st.getTracks().forEach((t) => t.stop()); rec = null; $('#recBtn').classList.remove('rec'); $('#recBtn').textContent = '🎙️';
-      const type = (mr.mimeType || 'audio/webm').split(';')[0];
-      if (chunks.length) sendFiles([new File(chunks, 'ses.' + (type.includes('mp4') ? 'm4a' : 'webm'), { type })]);
+    await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = reject; });
+    const width = Math.min(360, video.videoWidth || 360), height = Math.max(1, Math.round(width * (video.videoHeight || 360) / (video.videoWidth || 360)));
+    const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    const gif = new GIF({ workers: 2, quality: 15, width, height, workerScript: '/vendor/gif/gif.worker.js' });
+    const duration = Math.min(2.5, Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 2.5);
+    for (let t = 0; t < duration; t += 0.12) {
+      if (Math.abs(video.currentTime - t) > 0.001) {
+        await new Promise((resolve) => { const done = () => resolve(); video.addEventListener('seeked', done, { once: true }); video.currentTime = t; });
+      }
+      ctx.drawImage(video, 0, 0, width, height); gif.addFrame(canvas, { copy: true, delay: 120 });
+    }
+    $('#makeGif').textContent = '⏳'; $('#makeGif').disabled = true;
+    const blob = await new Promise((resolve, reject) => { gif.on('finished', resolve); gif.on('abort', reject); gif.render(); });
+    await sendMsg(new File([blob], 'animasyon.gif', { type: 'image/gif' }));
+  } catch (err) { alert('GIF oluşturulamadı: ' + err.message); }
+  finally { $('#makeGif').textContent = 'GIF'; $('#makeGif').disabled = false; URL.revokeObjectURL(video.src); }
+};
+
+// Sesli mesaj kaydı; mevcut audio mesaj türü ve dosya yedeklemesi kullanılır.
+let audioRecorder = null, audioChunks = [], audioStream = null;
+$('#recordAudio').onclick = async () => {
+  if (audioRecorder && audioRecorder.state === 'recording') { audioRecorder.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) return alert('Bu tarayıcı ses kaydını desteklemiyor.');
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true }); audioChunks = [];
+    audioRecorder = new MediaRecorder(audioStream);
+    audioRecorder.ondataavailable = (ev) => { if (ev.data.size) audioChunks.push(ev.data); };
+    audioRecorder.onstop = async () => {
+      audioStream.getTracks().forEach((t) => t.stop()); audioStream = null;
+      $('#recording').classList.add('hide'); $('#recordAudio').textContent = '🎙';
+      const blob = new Blob(audioChunks, { type: audioRecorder.mimeType || 'audio/webm' });
+      if (blob.size && curConv) await sendMsg(new File([blob], 'sesli-mesaj.webm', { type: blob.type }));
     };
-    mr.start(); rec = mr; $('#recBtn').classList.add('rec'); $('#recBtn').textContent = '⏹';
-  } catch (e) { alert('Mikrofon izni gerekli: ' + e.message); }
+    audioRecorder.start(); $('#recording').classList.remove('hide'); $('#recordAudio').textContent = '⏹';
+  } catch (err) { alert('Mikrofon izni gerekli: ' + err.message); }
 };
 
 $('#btnInfo').onclick = async () => {
   const mu = await api('/mutuals');
   const inConv = new Set(curConv.members.filter((m) => !m.left).map((m) => m.id));
   const addable = mu.filter((u) => !inConv.has(u.id));
-  modal(`<h3>${esc(curConv.name)}</h3><div>${curConv.members.filter((m) => !m.left).map((m) => `<div class="item">${avatar(m, 'sm')} ${esc(m.username)}</div>`).join('')}</div>
+  modal(`<h3>${esc(curConv.name)}</h3><p style="color:var(--mut)">${esc(curConv.description||'Grup açıklaması yok')}</p>
+   <input id="groupNameEdit" value="${esc(curConv.name)}" maxlength="40" placeholder="Grup adı"><input id="groupDescEdit" value="${esc(curConv.description||'')}" maxlength="300" placeholder="Grup açıklaması" style="margin-top:8px">
+   <button class="ghost" id="groupAvatarBtn" style="margin-top:8px">Grup fotoğrafını değiştir</button><input type="file" id="groupAvatarFile" class="hide" accept="image/*"><button class="pri" id="saveGroupProfile" style="margin-top:8px">Grup profilini kaydet</button>
+   <div style="margin-top:12px">${curConv.members.filter((m) => !m.left).map((m) => `<div class="item">${avatar(m, 'sm')} ${esc(m.username)}</div>`).join('')}</div>
    ${addable.length ? '<h3 style="margin-top:14px">Kişi ekle</h3>' + addable.map((u) => `<div class="item" data-add="${u.id}">${avatar(u, 'sm')} ${esc(u.username)} <span style="margin-left:auto">➕</span></div>`).join('') : ''}
    <button class="ghost" id="leave" style="margin-top:12px">Gruptan çık</button>`);
+  $('#groupAvatarBtn').onclick=()=>$('#groupAvatarFile').click();
+  $('#groupAvatarFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);try{await api('/convs/'+curConv.id+'/group-avatar',{body:fd});await loadConvs();curConv=convs.find(c=>c.id===curConv.id)||curConv;closeModal();openConv(curConv)}catch(er){alert(er.message)}};
+  $('#saveGroupProfile').onclick=async()=>{try{curConv=await api('/convs/'+curConv.id+'/group-profile',{method:'PUT',json:{name:$('#groupNameEdit').value,description:$('#groupDescEdit').value}});$('#chName').textContent=curConv.name;closeModal();}catch(e){alert(e.message)}};
   document.querySelectorAll('[data-add]').forEach((el) => (el.onclick = async () => { await api(`/convs/${curConv.id}/members`, { json: { userId: +el.dataset.add } }); closeModal(); await loadConvs(); openConv(convs.find((c) => c.id === curConv.id)); }));
   $('#leave').onclick = async () => { await api(`/convs/${curConv.id}/leave`, { method: 'POST' }); closeModal(); await loadConvs(); openConv(convs.find((c) => c.id === curConv.id)); };
 };
@@ -528,6 +626,25 @@ $('#btnInfo').onclick = async () => {
 let ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 let call = null; // { id, stream, video, peers:{sid:{pc,pending}} }
 let pendingCall = null; const peerNames = {};
+let ringTimer = null, ringAudio = null;
+function startRingtone() {
+  stopRingtone();
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+    ringAudio = new Ctx();
+    const beep = () => {
+      if (!ringAudio || ringAudio.state === 'closed') return;
+      const osc = ringAudio.createOscillator(), gain = ringAudio.createGain();
+      osc.frequency.value = 520; gain.gain.value = 0.045; osc.connect(gain); gain.connect(ringAudio.destination);
+      osc.start(); osc.stop(ringAudio.currentTime + 0.22);
+    };
+    ringAudio.resume().then(beep).catch(() => {}); ringTimer = setInterval(beep, 900);
+  } catch {}
+}
+function stopRingtone() {
+  if (ringTimer) clearInterval(ringTimer); ringTimer = null;
+  if (ringAudio) { const a = ringAudio; ringAudio = null; a.close().catch(() => {}); }
+}
 
 async function getStream(video) {
   try { return await navigator.mediaDevices.getUserMedia({ audio: true, video: video ? { facingMode: 'user' } : false }); }
@@ -593,42 +710,12 @@ function endCall() {
   socket.emit('call:leave');
   Object.keys(call.peers).forEach(removePeer);
   call.stream.getTracks().forEach((t) => t.stop());
-  sharing = false; $('#cScreen').textContent = '🖥️';
+  if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null;}
   call = null; $('#call').classList.add('hide'); $('#grid').innerHTML = '';
 }
-// Akışa yeni video izi koy (tüm bağlantılarda değiştir ya da ekle)
-async function setVideoTrack(track) {
-  const old = call.stream.getVideoTracks()[0];
-  if (old) { call.stream.removeTrack(old); if (old !== track) old.stop(); }
-  call.stream.addTrack(track);
-  addTile('me', 'Sen', call.stream, true);
-  for (const [sid, { pc }] of Object.entries(call.peers)) {
-    const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video') || pc.getSenders().find((s) => !s.track && pc.getTransceivers().find((t) => t.sender === s && t.receiver.track.kind === 'video'));
-    if (sender) await sender.replaceTrack(track);
-    else { pc.addTrack(track, call.stream); await pc.setLocalDescription(await pc.createOffer()); socket.emit('signal', { to: sid, data: { desc: pc.localDescription } }); }
-  }
-  call.video = true;
-}
-let facing = 'user', sharing = false;
-$('#cScreen').onclick = async () => {
-  if (!call) return;
-  if (!navigator.mediaDevices.getDisplayMedia) return alert('Bu cihaz ekran paylaşımını desteklemiyor');
-  try {
-    if (sharing) { const st = await getStream(true); if (!st) return; await setVideoTrack(st.getVideoTracks()[0]); sharing = false; $('#cScreen').textContent = '🖥️'; return; }
-    const ds = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    const tr = ds.getVideoTracks()[0]; tr.onended = () => { if (sharing && call) $('#cScreen').onclick(); };
-    await setVideoTrack(tr); sharing = true; $('#cScreen').textContent = '⛔';
-  } catch (e) { if (e.name !== 'NotAllowedError') alert(e.message); }
-};
-$('#cFlip').onclick = async () => {
-  if (!call) return;
-  try {
-    facing = facing === 'user' ? 'environment' : 'user';
-    const st = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
-    await setVideoTrack(st.getVideoTracks()[0]);
-  } catch (e) { alert('Kamera çevrilemedi: ' + e.message); }
-};
 $('#cEnd').onclick = endCall;
+let screenStream=null;
+$('#cShare').onclick=async()=>{if(!call)return;if(!Object.values(call.peers).some(p=>p.pc.getSenders().some(x=>x.track&&x.track.kind==='video')))return alert('Ekran paylaşımı için görüntülü arama başlatmalısın.');if(screenStream){screenStream.getTracks().forEach(t=>t.stop());return}if(!navigator.mediaDevices?.getDisplayMedia)return alert('Tarayıcı ekran paylaşımını desteklemiyor');try{screenStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});const track=screenStream.getVideoTracks()[0];for(const peer of Object.values(call.peers)){const sender=peer.pc.getSenders().find(x=>x.track&&x.track.kind==='video');if(sender)await sender.replaceTrack(track)}track.onended=async()=>{const cam=call?.stream.getVideoTracks()[0]||null;for(const peer of Object.values(call?.peers||{})){const sender=peer.pc.getSenders().find(x=>x.track&&x.track.kind==='video');if(sender)await sender.replaceTrack(cam)}screenStream=null};}catch(e){screenStream=null;alert('Ekran paylaşımı başlatılamadı: '+e.message)}};
 $('#cMute').onclick = () => { const t = call.stream.getAudioTracks()[0]; t.enabled = !t.enabled; $('#cMute').textContent = t.enabled ? '🎤' : '🔇'; };
 $('#cCam').onclick = () => { const t = call.stream.getVideoTracks()[0]; if (t) { t.enabled = !t.enabled; $('#cCam').textContent = t.enabled ? '📷' : '🚫'; } };
 $('#cAdd').onclick = async () => {
@@ -642,6 +729,10 @@ $('#cAdd').onclick = async () => {
 
 function showIncoming(c) {
   if (call) return;
+  if (!document.hidden) startRingtone();
+  if (document.hidden && swRegistration && Notification.permission === 'granted') {
+    swRegistration.showNotification('Gelen ' + (c.video ? 'görüntülü' : 'sesli') + ' arama', { body: (c.from.username || 'Birisi') + ' seni arıyor', tag: 'call-' + c.callId, requireInteraction: true, data: { url: '/?incomingCall=' + encodeURIComponent(c.callId) + '&video=' + (c.video ? '1' : '0') + '&from=' + encodeURIComponent(c.from.username || '') } }).catch(() => {});
+  }
   pendingCall = c;
   const box = $('#incoming');
   box.classList.remove('hide');
@@ -650,7 +741,7 @@ function showIncoming(c) {
   $('#acc').onclick = async () => { const p = pendingCall; hideIncoming(); const s = await getStream(p.video); if (s) joinCall(p.callId, s, p.video); };
   $('#dec').onclick = hideIncoming;
 }
-function hideIncoming() { pendingCall = null; $('#incoming').classList.add('hide'); }
+function hideIncoming() { stopRingtone(); pendingCall = null; $('#incoming').classList.add('hide'); }
 
 boot();
 </script>

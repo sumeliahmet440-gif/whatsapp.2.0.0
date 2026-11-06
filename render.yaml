@@ -10,26 +10,15 @@ services:
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
-      # ÜCRETSİZ kalıcı veri: özel bir GitHub reposu (GH_TOKEN + GH_REPO)
-      - key: GH_TOKEN
+      # Veriler GitHub deposundaki "veri" dalına yedeklenir (ücretsiz). Depo PRIVATE (özel) olmalı!
+      - key: GITHUB_TOKEN        # GitHub'da oluşturduğun token (Contents: Read and write)
         sync: false
-      - key: GH_REPO
+      - key: GITHUB_REPO         # kullanici/repo-adi
         sync: false
-      - key: GH_BRANCH
-        value: main
-      # (Alternatif) Bulut depolama (S3 uyumlu: Cloudflare R2, Backblaze B2...) - veriler burada saklanır
-      - key: S3_ENDPOINT
+      # İsteğe bağlı: ayrı medya ve Reels depoları. Boş bırakılırsa ilk depo kullanılır.
+      - key: GITHUB_REPO_MEDIA  # kullanici/sohbet-medya
         sync: false
-      - key: S3_BUCKET
-        sync: false
-      - key: S3_KEY
-        sync: false
-      - key: S3_SECRET
-        sync: false
-      - key: S3_REGION
-        value: auto
-      # İsteğe bağlı: GIF arama (ücretsiz anahtar: developers.giphy.com)
-      - key: GIPHY_KEY
+      - key: GITHUB_REPO_REELS  # kullanici/sohbet-reels
         sync: false
       # İsteğe bağlı: aramalar için TURN sunucusu
       - key: TURN_URL
@@ -37,4 +26,12 @@ services:
       - key: TURN_USER
         sync: false
       - key: TURN_PASS
+        sync: false
+
+      # Web Push bildirimleri (isteğe bağlı; VAPID anahtarları npx web-push generate-vapid-keys ile üretilir)
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
         sync: false

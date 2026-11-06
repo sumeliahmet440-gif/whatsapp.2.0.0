@@ -64,7 +64,24 @@ CREATE TABLE IF NOT EXISTS stories(
   caption TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS push_subscriptions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  endpoint TEXT NOT NULL UNIQUE,
+  subscription TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+CREATE TABLE IF NOT EXISTS reels(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, file TEXT NOT NULL,
+  caption TEXT DEFAULT '', created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reels_created ON reels(created_at DESC);
+CREATE TABLE IF NOT EXISTS reel_likes(reel_id INTEGER NOT NULL,user_id INTEGER NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(reel_id,user_id));
+CREATE TABLE IF NOT EXISTS reel_comments(id INTEGER PRIMARY KEY AUTOINCREMENT,reel_id INTEGER NOT NULL,user_id INTEGER NOT NULL,text TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS gif_library(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,name TEXT NOT NULL,file TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'gif',created_at INTEGER NOT NULL);
 `);
+
 
 // Eski sürümden kalan bir yedek geri yüklendiyse eksik sütunları ekle (veri silinmez)
 function ensureColumn(table, col, ddl) {
@@ -80,6 +97,8 @@ ensureColumn('messages', 'file', 'TEXT');
 ensureColumn('messages', 'file_name', 'TEXT');
 ensureColumn('stories', 'kind', "TEXT NOT NULL DEFAULT 'image'");
 ensureColumn('stories', 'caption', 'TEXT');
+ensureColumn('convs', 'avatar', 'TEXT');
+ensureColumn('convs', 'description', "TEXT DEFAULT ''");
 
 // ---------- Yardımcılar ----------
 // Hata sebebini kısa ve dosya yolu içermeden yazar (ekranda "Sunucu hatası (...)" olarak görünür)
@@ -99,6 +118,33 @@ const isAnyMember = (conv, user) =>
   !!db.prepare('SELECT 1 FROM members WHERE conv_id=? AND user_id=?').get(conv, user);
 const activeMemberIds = (conv) =>
   db.prepare('SELECT user_id FROM members WHERE conv_id=? AND left=0').all(conv).map((r) => r.user_id);
+
+// Depolama politikası: mesajlar 10 gün, Reels 5 ay tutulur.
+const TEN_DAYS = 10 * DAY;
+const fiveMonthsAgo = () => { const d = new Date(now()); d.setMonth(d.getMonth() - 5); return d.getTime(); };
+function removeUnreferencedUpload(url) {
+  if (!url || !String(url).startsWith('/uploads/')) return;
+  const name = path.basename(url);
+  const used = db.prepare(`SELECT 1 FROM messages WHERE file=? UNION ALL SELECT 1 FROM stories WHERE file=? UNION ALL SELECT 1 FROM reels WHERE file=? UNION ALL SELECT 1 FROM gif_library WHERE file=? UNION ALL SELECT 1 FROM convs WHERE avatar=? LIMIT 1`).get(url,url,url,url,url);
+  if (!used) { try { fs.unlinkSync(path.join(UPLOADS, name)); } catch {} if (bk.deleteUpload) bk.deleteUpload(name).catch((e) => console.warn('Bulut dosyası silinemedi:', e.message)); }
+}
+function cleanupExpiredData() {
+  const msgCut = now() - TEN_DAYS;
+  const reelCut = fiveMonthsAgo();
+  const oldMessages = db.prepare('SELECT file FROM messages WHERE created_at < ? AND file IS NOT NULL').all(msgCut);
+  const oldReels = db.prepare('SELECT file FROM reels WHERE created_at < ?').all(reelCut);
+  const oldStories = db.prepare('SELECT file FROM stories WHERE created_at < ?').all(now() - DAY);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM messages WHERE created_at < ?').run(msgCut);
+    db.prepare('DELETE FROM reels WHERE created_at < ?').run(reelCut);
+    db.prepare('DELETE FROM reel_likes WHERE reel_id NOT IN (SELECT id FROM reels)').run();
+    db.prepare('DELETE FROM reel_comments WHERE reel_id NOT IN (SELECT id FROM reels)').run();
+    db.prepare('DELETE FROM stories WHERE created_at < ?').run(now() - DAY);
+  });
+  tx();
+  [...oldMessages, ...oldReels, ...oldStories].forEach((r) => removeUnreferencedUpload(r.file));
+}
+
 
 function kindFromMime(m = '') {
   if (m.startsWith('image/')) return 'image';
@@ -120,7 +166,7 @@ const upload = multer({ storage, limits: { fileSize: 200 * 1024 * 1024 } });
 // Yüklenen dosyayı bulut yedeğine de koy (cevap vermeden önce, böylece kaybolmaz)
 const mirror = (req, res, next) => {
   if (!req.file) return next();
-  bk.putUpload(req.file.filename).then(() => next(), (e) => { console.error('Dosya yedeklenemedi', e.message); next(); });
+  bk.putUpload(req.file.filename, req.path.startsWith('/api/reels') ? 'reels' : 'media').then(() => next(), (e) => { console.error('Dosya yedeklenemedi', e.message); next(); });
 };
 
 const app = express();
@@ -132,8 +178,53 @@ process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 process.on('uncaughtException', (e) => console.error('uncaughtException', e));
 const io = new Server(server, { maxHttpBufferSize: 1e6 });
 
+// Web Push: abonelikler SQLite'ta tutulur; mevcut GitHub/S3 yedeklemesi app.db'yi
+// zaten yedeklediği için yeni bildirim kayıtları da aynı kalıcı depoya dahil olur.
+let webpush = null;
+const vapidPublic = process.env.VAPID_PUBLIC_KEY || '';
+const vapidPrivate = process.env.VAPID_PRIVATE_KEY || '';
+const pushReady = !!(vapidPublic && vapidPrivate);
+if (pushReady) {
+  try {
+    webpush = require('web-push');
+    webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', vapidPublic, vapidPrivate);
+    console.log('Web Push bildirimleri hazır.');
+  } catch (e) { console.error('Web Push başlatılamadı:', e.message); }
+}
+function pushUser(userId, payload) {
+  if (!webpush) return;
+  // Push her zaman gönderilir: sekme arka planda açık olsa bile işletim sistemi bildirimi gerekir.
+  // Service worker görünür/odaktaki sekmede yinelenen bildirimi bastırır.
+  const rows = db.prepare('SELECT id,subscription FROM push_subscriptions WHERE user_id=?').all(userId);
+  for (const row of rows) {
+    let sub;
+    try { sub = JSON.parse(row.subscription); } catch { db.prepare('DELETE FROM push_subscriptions WHERE id=?').run(row.id); continue; }
+    webpush.sendNotification(sub, JSON.stringify(payload), { TTL: payload.call ? 90 : 86400, urgency: 'high' })
+      .catch((e) => {
+        if (e.statusCode === 404 || e.statusCode === 410)
+          db.prepare('DELETE FROM push_subscriptions WHERE id=?').run(row.id);
+        else console.warn('Push bildirimi gönderilemedi:', e.statusCode || e.message);
+      });
+  }
+}
+
+
 app.get('/healthz', (req, res) => res.send('ok'));
 app.use(express.json({ limit: '1mb' }));
+
+// Verilerin kaydedilip kaydedilmediğini gösterir: tarayıcıda  https://SITEN.onrender.com/durum
+app.get('/durum', (req, res) => {
+  const s = bk.status();
+  res.set('Cache-Control', 'no-store').json({
+    kalici_kayit: s.enabled ? 'AÇIK' : 'KAPALI (GITHUB_TOKEN ve GITHUB_REPO girilmemiş: veriler yeniden başlayınca SİLİNİR)',
+    ...s,
+    kullanici_sayisi: db.prepare('SELECT COUNT(*) c FROM users').get().c,
+    mesaj_sayisi: db.prepare('SELECT COUNT(*) c FROM messages').get().c,
+    reels_sayisi: db.prepare('SELECT COUNT(*) c FROM reels').get().c,
+  });
+});
+// GIF encoder/worker same-origin sunulur; cross-origin Worker engeline takılmaz.
+app.use('/vendor/gif', express.static(path.join(__dirname, 'node_modules/gif.js.optimized/dist')));
 // Dosya yerelde yoksa (sunucu sıfırlandıysa) yedekten getir
 app.use('/uploads', (req, res, next) => {
   let name = '';
@@ -179,6 +270,25 @@ const wrap = (fn) => (req, res) => {
   }
 };
 
+// Push API routes: wrap helper is initialized above before use.
+app.get('/api/push/key', auth, (req, res) => res.json({ enabled: !!webpush, publicKey: webpush ? vapidPublic : null }));
+app.post('/api/push/subscribe', auth, wrap((req, res) => {
+  if (!webpush) return res.status(503).json({ error: 'Bildirim sunucusu henüz yapılandırılmamış. Render ortamına VAPID anahtarları eklenmeli.' });
+  const sub = req.body && req.body.subscription;
+  if (!sub || typeof sub.endpoint !== 'string' || !sub.keys || !sub.keys.p256dh || !sub.keys.auth)
+    return res.status(400).json({ error: 'Geçersiz bildirim aboneliği' });
+  db.prepare(`INSERT INTO push_subscriptions(user_id,endpoint,subscription,created_at) VALUES(?,?,?,?)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, subscription=excluded.subscription`)
+    .run(req.user.id, sub.endpoint, JSON.stringify(sub), now());
+  res.json({ ok: true });
+}));
+app.delete('/api/push/subscribe', auth, wrap((req, res) => {
+  const endpoint = String(req.body && req.body.endpoint || '');
+  if (endpoint) db.prepare('DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?').run(req.user.id, endpoint);
+  res.json({ ok: true });
+}));
+
+
 app.post('/api/register', wrap((req, res) => {
   const username = String(req.body.username || '').trim();
   if (!/^[\p{L}\p{N}_.]{2,20}$/u.test(username))
@@ -219,24 +329,6 @@ app.post('/api/avatar', auth, upload.single('file'), mirror, wrap((req, res) => 
   const url = '/uploads/' + req.file.filename;
   db.prepare('UPDATE users SET avatar=? WHERE id=?').run(url, req.user.id);
   res.json({ avatar: url });
-}));
-
-// ---------- GIF arama (GIPHY; GIPHY_KEY yoksa kullanıcıya bilgi verilir) ----------
-app.get('/api/gifs', auth, wrap(async (req, res) => {
-  const key = process.env.GIPHY_KEY;
-  if (!key) return res.json({ error: 'GIF arama kapalı. Yönetici GIPHY_KEY eklemeli; şimdilik "Cihazdan GIF seç" ile GIF gönderebilirsin.' });
-  const q = String(req.query.q || '').trim().slice(0, 60);
-  const url = q
-    ? 'https://api.giphy.com/v1/gifs/search?limit=24&rating=pg-13&q=' + encodeURIComponent(q) + '&api_key=' + key
-    : 'https://api.giphy.com/v1/gifs/trending?limit=24&rating=pg-13&api_key=' + key;
-  const r = await fetch(url);
-  if (!r.ok) return res.json({ error: 'GIF servisi şu an cevap vermiyor (' + r.status + ')' });
-  const j = await r.json();
-  const items = (j.data || []).map((g) => ({
-    preview: g.images.fixed_width_small ? g.images.fixed_width_small.url : g.images.fixed_width.url,
-    url: (g.images.fixed_height || g.images.original).url,
-  }));
-  res.json({ items });
 }));
 
 // ---------- Kullanıcılar / takip ----------
@@ -297,7 +389,7 @@ function convView(c, meId) {
     .prepare('SELECT u.id,u.username,u.avatar,m.left FROM members m JOIN users u ON u.id=m.user_id WHERE m.conv_id=?')
     .all(c.id);
   const last = db.prepare('SELECT * FROM messages WHERE conv_id=? ORDER BY id DESC LIMIT 1').get(c.id);
-  return { id: c.id, type: c.type, name: c.name, members, last, created_by: c.created_by };
+  return { id: c.id, type: c.type, name: c.name, avatar: c.avatar || null, description: c.description || '', members, last, created_by: c.created_by };
 }
 
 app.get('/api/convs', auth, wrap((req, res) => {
@@ -354,6 +446,27 @@ app.post('/api/convs/:id/members', auth, wrap((req, res) => {
 }));
 
 // Gruptan çık: sohbet ve mesajlar SİLİNMEZ
+app.put('/api/convs/:id/group-profile', auth, wrap((req, res) => {
+  const id = +req.params.id;
+  const c = db.prepare('SELECT * FROM convs WHERE id=? AND type=\'group\'').get(id);
+  if (!c || !isActiveMember(id, req.user.id) || c.created_by !== req.user.id) return res.status(403).json({ error: 'Grup profilini yalnızca grup kurucusu düzenleyebilir' });
+  db.prepare('UPDATE convs SET name=?,description=? WHERE id=?').run(String(req.body.name || c.name).trim().slice(0,40), String(req.body.description || '').slice(0,300), id);
+  notifyConvChanged(id);
+  res.json(convView(db.prepare('SELECT * FROM convs WHERE id=?').get(id), req.user.id));
+}));
+
+app.post('/api/convs/:id/group-avatar', auth, upload.single('file'), mirror, wrap((req,res) => {
+  const id=+req.params.id, c=db.prepare("SELECT * FROM convs WHERE id=? AND type='group'").get(id);
+  if (!c || c.created_by!==req.user.id || !isActiveMember(id,req.user.id)) return res.status(403).json({error:'Grup fotoğrafını yalnızca grup kurucusu değiştirebilir'});
+  if (!req.file || !req.file.mimetype.startsWith('image/')) return res.status(400).json({error:'Grup fotoğrafı seçmelisin'});
+  const old=c.avatar;
+  const avatar='/uploads/'+req.file.filename;
+  db.prepare('UPDATE convs SET avatar=? WHERE id=?').run(avatar,id);
+  if (old) removeUnreferencedUpload(old);
+  notifyConvChanged(id);
+  res.json({avatar});
+}));
+
 app.post('/api/convs/:id/leave', auth, wrap((req, res) => {
   const id = +req.params.id;
   const c = db.prepare('SELECT type FROM convs WHERE id=?').get(id);
@@ -404,6 +517,71 @@ app.post('/api/convs/:id/messages', auth, canPost, upload.single('file'), mirror
     .run(id, req.user.id, kind, text, file, fileName, now());
   const msg = { ...db.prepare('SELECT * FROM messages WHERE id=?').get(r.lastInsertRowid), username: req.user.username, avatar: req.user.avatar };
   for (const uid of activeMemberIds(id)) io.to('user:' + uid).emit('message', msg);
+  for (const uid of activeMemberIds(id)) if (uid !== req.user.id) {
+    const c = db.prepare('SELECT type,name FROM convs WHERE id=?').get(id);
+    pushUser(uid, { title: c && c.type === 'group' ? c.name : req.user.username, body: text || (kind === 'image' ? '📷 Fotoğraf' : kind === 'video' ? '🎥 Video' : kind === 'audio' ? '🎵 Sesli mesaj' : '📎 Dosya'), url: '/?open=' + id, tag: 'msg-' + id });
+  }
+  res.json(msg);
+}));
+
+// ---------- Reels: kullanıcı başına 7 günde 1 paylaşım; 5 ay saklama ----------
+app.get('/api/reels', auth, wrap((req, res) => {
+  const rows = db.prepare(`SELECT r.*,u.username,u.avatar,
+    (SELECT COUNT(*) FROM reel_likes l WHERE l.reel_id=r.id) likes,
+    EXISTS(SELECT 1 FROM reel_likes l WHERE l.reel_id=r.id AND l.user_id=?) liked,
+    (SELECT COUNT(*) FROM reel_comments c WHERE c.reel_id=r.id) comments
+    FROM reels r JOIN users u ON u.id=r.user_id WHERE r.created_at>? ORDER BY r.created_at DESC LIMIT 100`).all(req.user.id, fiveMonthsAgo());
+  res.json(rows);
+}));
+const canPostReel = (req,res,next) => {
+  const last=db.prepare('SELECT created_at FROM reels WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get(req.user.id);
+  if (last && now()-last.created_at < 7*DAY) return res.status(429).json({error:`Yeni Reels için ${Math.ceil((7*DAY-(now()-last.created_at))/DAY)} gün beklemelisin.`});
+  next();
+};
+app.post('/api/reels', auth, canPostReel, upload.single('file'), mirror, wrap((req, res) => {
+  if (!req.file || kindFromMime(req.file.mimetype) !== 'video') return res.status(400).json({ error: 'Reels için video seçmelisin' });
+  const last = db.prepare('SELECT created_at FROM reels WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get(req.user.id);
+  const wait = 7 * DAY - (now() - (last?.created_at || 0));
+  if (last && wait > 0) { try { fs.unlinkSync(req.file.path); } catch {} return res.status(429).json({ error: `Yeni Reels için ${Math.ceil(wait / DAY)} gün beklemelisin.` }); }
+  const caption = String(req.body.caption || '').slice(0,500);
+  const r = db.prepare('INSERT INTO reels(user_id,file,caption,created_at) VALUES(?,?,?,?)').run(req.user.id,'/uploads/'+req.file.filename,caption,now());
+  res.json({ id:r.lastInsertRowid, ok:true });
+}));
+app.post('/api/reels/:id/like', auth, wrap((req,res) => {
+  const id=+req.params.id; if (!db.prepare('SELECT 1 FROM reels WHERE id=?').get(id)) return res.status(404).json({error:'Reels bulunamadı'});
+  const exists=db.prepare('SELECT 1 FROM reel_likes WHERE reel_id=? AND user_id=?').get(id,req.user.id);
+  if (exists) db.prepare('DELETE FROM reel_likes WHERE reel_id=? AND user_id=?').run(id,req.user.id);
+  else db.prepare('INSERT INTO reel_likes(reel_id,user_id,created_at) VALUES(?,?,?)').run(id,req.user.id,now());
+  res.json({liked:!exists,likes:db.prepare('SELECT COUNT(*) c FROM reel_likes WHERE reel_id=?').get(id).c});
+}));
+app.get('/api/reels/:id/comments', auth, wrap((req,res) => res.json(db.prepare('SELECT c.*,u.username,u.avatar FROM reel_comments c JOIN users u ON u.id=c.user_id WHERE c.reel_id=? ORDER BY c.id DESC LIMIT 100').all(+req.params.id))));
+app.post('/api/reels/:id/comments', auth, wrap((req,res) => {
+  const id=+req.params.id, text=String(req.body.text||'').trim().slice(0,500);
+  if (!db.prepare('SELECT 1 FROM reels WHERE id=?').get(id)) return res.status(404).json({error:'Reels bulunamadı'});
+  if (!text) return res.status(400).json({error:'Yorum boş olamaz'});
+  const r=db.prepare('INSERT INTO reel_comments(reel_id,user_id,text,created_at) VALUES(?,?,?,?)').run(id,req.user.id,text,now());
+  res.json({id:r.lastInsertRowid,text,username:req.user.username,created_at:now()});
+}));
+
+// Kullanıcı GIF/çıkartma kütüphanesi: ada göre aranabilir ve sohbetten gönderilebilir.
+app.get('/api/gifs', auth, wrap((req,res) => {
+  const q=String(req.query.q||'').trim();
+  res.json(db.prepare(`SELECT g.*,u.username FROM gif_library g JOIN users u ON u.id=g.user_id WHERE (?='' OR g.name LIKE ?) ORDER BY g.id DESC LIMIT 100`).all(q,'%'+q+'%'));
+}));
+app.post('/api/gifs', auth, upload.single('file'), mirror, wrap((req,res) => {
+  if (!req.file || !/^image\/(gif|png|webp|jpeg)/i.test(req.file.mimetype)) return res.status(400).json({error:'GIF veya çıkartma görseli seç'});
+  const name=String(req.body.name||req.file.originalname||'İsimsiz').trim().slice(0,60);
+  const kind=req.file.mimetype==='image/gif'?'gif':'sticker';
+  const r=db.prepare('INSERT INTO gif_library(user_id,name,file,kind,created_at) VALUES(?,?,?,?,?)').run(req.user.id,name,'/uploads/'+req.file.filename,kind,now());
+  res.json({id:r.lastInsertRowid,name,file:'/uploads/'+req.file.filename,kind});
+}));
+
+app.post('/api/gifs/:id/send', auth, wrap((req,res) => {
+  const g=db.prepare('SELECT * FROM gif_library WHERE id=?').get(+req.params.id), conv=+req.body.convId;
+  if (!g || !isActiveMember(conv,req.user.id)) return res.status(403).json({error:'Bu çıkartmayı gönderemezsin'});
+  const r=db.prepare('INSERT INTO messages(conv_id,sender_id,kind,text,file,file_name,created_at) VALUES(?,?,?,?,?,?,?)').run(conv,req.user.id,'image',g.name,g.file,g.name,now());
+  const msg={...db.prepare('SELECT * FROM messages WHERE id=?').get(r.lastInsertRowid),username:req.user.username,avatar:req.user.avatar};
+  for (const uid of activeMemberIds(conv)) io.to('user:'+uid).emit('message',msg);
   res.json(msg);
 }));
 
@@ -480,6 +658,12 @@ io.on('connection', (socket) => {
       from: { id: me.id, username: me.username },
       convName: conv && conv.type === 'group' ? conv.name : null,
     });
+    pushUser(uid, {
+      title: 'Gelen ' + (call.video ? 'görüntülü' : 'sesli') + ' arama',
+      body: me.username + (conv && conv.type === 'group' ? ' · ' + conv.name : ''),
+      url: '/?incomingCall=' + encodeURIComponent(callId) + '&open=' + call.convId + '&video=' + (call.video ? '1' : '0') + '&from=' + encodeURIComponent(me.username),
+      tag: 'call-' + callId, requireInteraction: true, call: true,
+    });
   };
 
   socket.on('call:start', ({ convId, video }, ack) => {
@@ -520,26 +704,34 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => leaveCall(socket));
 });
 
-// ---------- Veritabanı yedeği (değişiklik varsa her 20 sn + kapanırken) ----------
+// ---------- Veritabanı yedeği (değişiklik varsa düzenli aralıkla + kapanırken) ----------
 if (bk.enabled) {
-  let last = -1, chain = Promise.resolve();
+  let last = -1, chain = Promise.resolve(), closing = false, busy = false, retryAt = 0;
   const doSnap = async () => {
     try {
+      if (!closing && Date.now() < retryAt) return; // hata sonrası kısa bekleme (GitHub'ı yormamak için)
       const ch = db.prepare('SELECT total_changes() c').get().c;
       if (ch === last) return;
       const tmp = path.join(DATA_DIR, 'app.db.bak');
       await db.backup(tmp);
-      await bk.putFile('app.db', tmp);
+      await bk.putFile('app.db', tmp, closing);
       last = ch;
-    } catch (e) { console.error('Yedek hatası:', e.message); }
+    } catch (e) { retryAt = Date.now() + 15000; console.error('Yedek hatası:', e.message); }
   };
-  const snap = () => (chain = chain.then(doSnap));
+  // Aynı anda tek yedek çalışır; değişiklik yoksa hiçbir şey yapmaz (bedava kontrol)
+  const snap = () => {
+    if (busy && !closing) return chain;
+    busy = true;
+    return (chain = chain.then(doSnap).finally(() => { busy = false; }));
+  };
   snap();
-  setInterval(snap, bk.INTERVAL);
-  const bye = async () => { await snap(); process.exit(0); };
+  setInterval(snap, bk.interval);
+  const bye = async () => { closing = true; bk.flushNow(); await snap(); process.exit(0); };
   process.on('SIGTERM', bye);
   process.on('SIGINT', bye);
-  console.log('Bulut yedekleme açık.');
+  console.log(`Yedekleme açık (${bk.mode}).`);
 }
 
+cleanupExpiredData();
+setInterval(() => { try { cleanupExpiredData(); } catch (e) { console.error('Otomatik temizlik hatası:', e); } }, 6 * 60 * 60 * 1000).unref();
 server.listen(PORT, '0.0.0.0', () => console.log('Sunucu çalışıyor: ' + PORT));
